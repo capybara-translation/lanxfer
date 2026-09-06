@@ -35,6 +35,5 @@ func usage() {
   lanxfer send [--port 8425] <ip> <file>`)
 }
 
-// runRecv and runSend are implemented in later tasks.
-func runRecv(args []string) error { return errors.New("recv: not implemented yet") }
+// runSend is implemented in a later task.
 func runSend(args []string) error { return errors.New("send: not implemented yet") }
