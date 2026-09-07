@@ -1,0 +1,44 @@
+version: 2
+
+builds:
+  - main: .
+    binary: lanxfer
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - repository:
+      owner: capybara-translation
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/capybara-translation/lanxfer"
+    description: "Send files directly between machines on your LAN"
+    license: "MIT"
+    install: |
+      bin.install "lanxfer"
+    test: |
+      system "#{bin}/lanxfer", "--version"
+
+changelog:
+  sort: asc
