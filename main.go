@@ -6,6 +6,10 @@ import (
 	"os"
 )
 
+// errUsage marks command-line misuse. main prints the usage text and exits
+// with status 2, distinguishing it from runtime failures (status 1).
+var errUsage = errors.New("invalid usage")
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -19,12 +23,14 @@ func main() {
 	case "send":
 		err = runSend(os.Args[2:])
 	default:
-		fmt.Fprintf(os.Stderr, "lanxfer: unknown command %q\n", os.Args[1])
-		usage()
-		os.Exit(2)
+		err = fmt.Errorf("%w: unknown command %q", errUsage, os.Args[1])
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "lanxfer:", err)
+		if errors.Is(err, errUsage) {
+			usage()
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }
@@ -34,6 +40,3 @@ func usage() {
   lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>]
   lanxfer send [--port 8425] <ip> <file>`)
 }
-
-// runSend is implemented in a later task.
-func runSend(args []string) error { return errors.New("send: not implemented yet") }
