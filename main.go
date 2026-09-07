@@ -22,6 +22,9 @@ func main() {
 		err = runRecv(os.Args[2:])
 	case "send":
 		err = runSend(os.Args[2:])
+	case "version", "--version":
+		fmt.Println("lanxfer " + version)
+		return
 	default:
 		err = fmt.Errorf("%w: unknown command %q", errUsage, os.Args[1])
 	}
@@ -38,5 +41,6 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>]
-  lanxfer send [--port 8425] <ip> <file>`)
+  lanxfer send [--port 8425] <ip> <file>
+  lanxfer --version`)
 }
