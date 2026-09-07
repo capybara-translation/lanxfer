@@ -81,18 +81,41 @@ Because it is plain HTTP, you can test a receiver with curl:
 
     curl -T file.bin http://192.168.1.20:8425/files/file.bin
 
-## Build
+## Install
 
-    go build .
+### Homebrew (macOS / Linux)
 
-Cross-compile for other machines on your LAN:
+    brew install capybara-translation/tap/lanxfer
 
-    GOOS=windows GOARCH=amd64 go build -o lanxfer.exe .
-    GOOS=linux   GOARCH=amd64 go build -o lanxfer-linux .
-    GOOS=darwin  GOARCH=arm64 go build -o lanxfer-mac .
+### go install
 
-Requires the Go version declared in `go.mod` (currently 1.25). No
-third-party dependencies.
+    go install github.com/capybara-translation/lanxfer@latest
+
+### Pre-built binaries
+
+Download the archive for your platform from the
+[Releases page](https://github.com/capybara-translation/lanxfer/releases)
+(`tar.gz` for macOS/Linux, `zip` for Windows) and put the `lanxfer` binary
+somewhere on your `PATH`. `checksums.txt` on the same page lists the SHA-256
+of every archive.
+
+### Build from source
+
+    git clone https://github.com/capybara-translation/lanxfer.git
+    cd lanxfer
+    go build -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty)" .
+
+Requires the Go version declared in `go.mod`. No third-party dependencies.
+
+### What `lanxfer --version` prints
+
+| How you installed | Output |
+|---|---|
+| Homebrew or a Releases archive | `lanxfer vX.Y.Z` |
+| `go install ...@vX.Y.Z` | `lanxfer vX.Y.Z` |
+| `go install ...@latest` from a non-tagged commit | `lanxfer dev` (pseudo versions are intentionally hidden) |
+| `go build` with the `ldflags` example above | whatever `git describe` resolves to |
+| Plain `go build` without `ldflags` | `lanxfer dev` |
 
 ## Roadmap
 
