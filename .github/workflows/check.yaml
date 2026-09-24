@@ -23,7 +23,9 @@ jobs:
           fi
 
       - run: go vet ./...
-      - run: go test ./...
+      # -race instruments memory access to catch unsynchronized goroutine
+      # access at runtime; discovery and recv run goroutines.
+      - run: go test -race ./...
 
   goreleaser-snapshot:
     runs-on: ubuntu-latest
