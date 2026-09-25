@@ -44,6 +44,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>] [--name <name>]
   lanxfer peers [--port 8425] [--wait 1s]
-  lanxfer send [--port 8425] <ip> <file>
+  lanxfer send [--port 8425] <ip-or-name> <file>
   lanxfer --version`)
 }
