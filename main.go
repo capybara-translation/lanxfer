@@ -40,7 +40,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>]
+  lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>] [--name <name>]
   lanxfer send [--port 8425] <ip> <file>
   lanxfer --version`)
 }
