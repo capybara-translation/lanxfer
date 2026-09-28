@@ -4,35 +4,44 @@
 home LAN, with no relay server in between.
 
 lanxfer is a small, dependency-free Go CLI. Run `lanxfer recv` on the machine
-that should receive, then `lanxfer send <ip> <file>` on the machine that has
-the file. That's it.
+that should receive, then `lanxfer send <name> <file>` on the machine that has
+the file. Receivers are found automatically on the local network.
 
 ## Status
 
-This is an MVP (Phase 1 of the roadmap below). It works, but it is
-deliberately minimal: single file, IP address required, no peer discovery,
-no progress bar, no encryption.
+Early but usable: single-file transfer, automatic peer discovery, and sending
+by name. No progress bar, no directory transfer, and no encryption yet.
 
 ## Usage
 
 Receiver (waits in the foreground; stop with Ctrl-C):
 
-    lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>]
+    lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>] [--name <name>]
 
-Sender:
+See who is receiving on your network:
 
-    lanxfer send [--port 8425] <receiver-ip> <file>
+    lanxfer peers [--port 8425] [--wait 1s]
+    NAME    ADDRESS            OS
+    mac2    192.168.1.20:8425  darwin
+    ubuntu  192.168.1.30:8425  linux
 
-Defaults: port `8425`, save directory `~/lanxfer`, maximum file size 50 GiB.
+Sender, by name or by IP address:
+
+    lanxfer send [--port 8425] <ip-or-name> <file>
+
+Defaults: port `8425`, save directory `~/lanxfer`, maximum file size 50 GiB,
+name = hostname without `.local`. Names are matched case-insensitively. If a
+receiver uses a non-default `--port`, pass the same `--port` when sending to
+it.
 
 Example:
 
-    # on 192.168.1.20
+    # on the machine called mac2
     lanxfer recv
 
     # on another machine
-    lanxfer send 192.168.1.20 ~/Downloads/movie.mp4
-    sending movie.mp4 -> 192.168.1.20
+    lanxfer send mac2 ~/Downloads/movie.mp4
+    sending movie.mp4 -> mac2 (192.168.1.20:8425)
     done: 4.8 GiB in 41.2s (119.3 MiB/s)
 
 If a file with the same name already exists on the receiver, the new one is
@@ -58,10 +67,40 @@ Built-in protections:
   leaves a truncated file that looks complete.
 - Uploads larger than `--max-size` are rejected before any data is read.
 - The save directory is created with mode `0700` and files with `0600`.
+- Discovery replies reveal only the receiver's name, port, and OS, and are
+  sent only to private, link-local, or loopback addresses.
+
+Discovery uses UDP broadcast on the same port number (8425/udp). If the
+receiver has a firewall, allow both TCP and UDP on that port. Names are
+self-declared and unauthenticated: anyone on the LAN can announce any name,
+so treat a name as a convenience, not as proof of identity.
 
 Known limitation: if the receiver process is killed (Ctrl-C) in the middle
 of a transfer, the in-progress `.lanxfer-*.part` file is left behind. It is
 safe to delete.
+
+## Troubleshooting
+
+If a machine does not show up in `lanxfer peers`, files sent to it will not
+arrive either: the same network path is blocked. Check on that machine:
+
+- **VPN.** Some VPN clients block local-network traffic, depending on their
+  state and policy (for example while the tunnel is being established).
+  Try again with the VPN disconnected, or allow local LAN access in its
+  settings.
+- **Firewall.** On macOS, allow incoming connections for `lanxfer` (System
+  Settings → Network → Firewall → Options). A binary rebuilt with `go build`
+  counts as a new app and must be allowed again. On Ubuntu with ufw:
+  `sudo ufw allow 8425`. On Windows, allow `lanxfer.exe` when Windows
+  Defender Firewall asks, on private networks.
+- **Is recv running?** On the receiver itself,
+  `echo '{"lanxfer":1,"type":"query"}' | nc -u -w1 127.0.0.1 8425` should
+  print a reply. If it does, the receiver works and something in between is
+  blocking it.
+
+The default name is the hostname, which macOS may change depending on the
+network (DHCP or a VPN can rename the machine). If you send by name, pin it
+with `lanxfer recv --name <name>`.
 
 ## Protocol
 
@@ -80,6 +119,22 @@ large, `500` storage error.
 Because it is plain HTTP, you can test a receiver with curl:
 
     curl -T file.bin http://192.168.1.20:8425/files/file.bin
+
+### Discovery
+
+One JSON object per UDP datagram on port 8425. A querier broadcasts
+
+    {"lanxfer":1,"type":"query"}
+
+to the directed broadcast address of each attached private network, and every
+running receiver answers the sender directly with
+
+    {"lanxfer":1,"type":"reply","name":"mac2","port":8425,"os":"darwin"}
+
+The receiver's IP is taken from the reply's source address. Datagrams that
+are not valid lanxfer packets are ignored. You can query by hand:
+
+    echo '{"lanxfer":1,"type":"query"}' | nc -u -w1 192.168.1.20 8425
 
 ## Install
 
@@ -119,13 +174,14 @@ Requires the Go version declared in `go.mod`. No third-party dependencies.
 
 ## Roadmap
 
-1. ~~TCP/HTTP file transfer to an IP address~~ (this MVP)
-2. Peer discovery on the LAN (`lanxfer peers`)
-3. Send by peer name (`lanxfer send mac2 file.zip`)
-4. Progress display and cancellation
-5. Directory transfer
-6. Device pairing and TLS
-7. GUI with drag and drop
+1. ~~TCP/HTTP file transfer to an IP address~~
+2. ~~Peer discovery on the LAN (`lanxfer peers`)~~
+3. ~~Send by peer name (`lanxfer send mac2 file.zip`)~~
+4. Send short text between machines (`lanxfer say mac2 "hello"`)
+5. Progress display and cancellation
+6. Directory transfer
+7. Device pairing and TLS
+8. GUI with drag and drop
 
 ## License
 
