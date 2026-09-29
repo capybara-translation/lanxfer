@@ -140,7 +140,7 @@ are not valid lanxfer packets are ignored. You can query by hand:
 
 ### Homebrew (macOS / Linux)
 
-    brew install capybara-translation/tap/lanxfer
+    brew install --cask capybara-translation/tap/lanxfer
 
 ### go install
 
@@ -170,7 +170,8 @@ Requires the Go version declared in `go.mod`. No third-party dependencies.
 | `go install ...@vX.Y.Z` | `lanxfer vX.Y.Z` |
 | `go install ...@latest` from a non-tagged commit | `lanxfer dev` (pseudo versions are intentionally hidden) |
 | `go build` with the `ldflags` example above | whatever `git describe` resolves to |
-| Plain `go build` without `ldflags` | `lanxfer dev` |
+| Plain `go build` on a clean, tagged checkout | `lanxfer vX.Y.Z` |
+| Plain `go build` on any other checkout | `lanxfer dev` (untagged commits and uncommitted changes are hidden) |
 
 ## Roadmap
 

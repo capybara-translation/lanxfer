@@ -5,20 +5,37 @@ on:
     tags:
       - "v*"
 
-permissions:
-  contents: write
-
 jobs:
-  release:
+  test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - run: go test -race ./...
+
+  # Runs only after the tests pass, so a broken tag is never published.
+  # Kept in its own job so the tests never run with a write-capable token.
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      # Create the GitHub Release. The Homebrew tap lives in another repository,
+      # so it is pushed with HOMEBREW_TAP_TOKEN instead.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
         with:
           # fetch all tags and full history so goreleaser can build the
           # changelog and resolve the version from git describe.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
