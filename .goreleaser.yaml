@@ -1,10 +1,14 @@
 version: 2
 
+project_name: lanxfer
+
 builds:
   - main: .
     binary: lanxfer
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      # .Version has no leading "v". Add it so `lanxfer --version` prints the
+      # tag itself, the same string `go install ...@vX.Y.Z` reports.
+      - -s -w -X main.version=v{{.Version}}
     env:
       - CGO_ENABLED=0
     goos:
@@ -25,20 +29,25 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-brews:
+# homebrew_casks replaces the deprecated brews section for pre-built binaries.
+homebrew_casks:
   - repository:
       owner: capybara-translation
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
     homepage: "https://github.com/capybara-translation/lanxfer"
     description: "Send files directly between machines on your LAN"
     license: "MIT"
-    install: |
-      bin.install "lanxfer"
-    test: |
-      system "#{bin}/lanxfer", "--version"
+    binaries: [lanxfer]
+    hooks:
+      post:
+        # The binary isn't signed or notarized. Homebrew quarantines cask
+        # downloads, so without this Gatekeeper refuses to run it.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/lanxfer"]
+          end
 
 changelog:
   sort: asc
