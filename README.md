@@ -144,7 +144,7 @@ are not valid lanxfer packets are ignored. You can query by hand:
 
 ### go install
 
-    go install github.com/capybara-translation/lanxfer@latest
+    go install github.com/capybara-translation/lanxfer/cmd/lanxfer@latest
 
 ### Pre-built binaries
 
@@ -158,7 +158,7 @@ of every archive.
 
     git clone https://github.com/capybara-translation/lanxfer.git
     cd lanxfer
-    go build -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty)" .
+    go build -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty)" ./cmd/lanxfer
 
 Requires the Go version declared in `go.mod`. No third-party dependencies.
 

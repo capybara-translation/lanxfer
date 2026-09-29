@@ -1,7 +1,7 @@
 version: 2
 
 builds:
-  - main: .
+  - main: ./cmd/lanxfer
     binary: lanxfer
     ldflags:
       - -s -w -X main.version={{.Version}}
