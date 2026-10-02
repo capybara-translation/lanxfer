@@ -62,7 +62,7 @@ func runRecv(args []string) error {
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: server.New(st, *maxSize, logger).Handler(),
+		Handler: server.New(st, *maxSize, server.NewInbox(filepath.Join(*dir, "messages.log"), os.Stdout), logger).Handler(),
 		// Defend against clients that open a connection and never send
 		// headers (slowloris). Body transfer is not affected.
 		ReadHeaderTimeout: 10 * time.Second,

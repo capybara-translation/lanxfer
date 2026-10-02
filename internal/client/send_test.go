@@ -23,7 +23,7 @@ func startReceiver(t *testing.T) (host string, port int, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(server.New(st, 1<<20, log.New(io.Discard, "", 0)).Handler())
+	ts := httptest.NewServer(server.New(st, 1<<20, nil, log.New(io.Discard, "", 0)).Handler())
 	t.Cleanup(ts.Close)
 	u, err := url.Parse(ts.URL)
 	if err != nil {

@@ -13,13 +13,15 @@ import (
 type Server struct {
 	storage *Storage
 	maxSize int64
+	inbox   *Inbox
 	logger  *log.Logger
 }
 
 // New creates a receive server. maxSize is the maximum number of bytes
-// accepted for a single file.
-func New(storage *Storage, maxSize int64, logger *log.Logger) *Server {
-	return &Server{storage: storage, maxSize: maxSize, logger: logger}
+// accepted for a single file. Text messages are delivered to inbox; if it is
+// nil, the server does not accept them.
+func New(storage *Storage, maxSize int64, inbox *Inbox, logger *log.Logger) *Server {
+	return &Server{storage: storage, maxSize: maxSize, inbox: inbox, logger: logger}
 }
 
 // Handler returns the routed http.Handler. Every request passes through the
@@ -27,6 +29,9 @@ func New(storage *Storage, maxSize int64, logger *log.Logger) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /files/{name}", s.handlePut)
+	if s.inbox != nil {
+		mux.HandleFunc("POST /messages", s.handleMessage)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !IsAllowedRemote(r.RemoteAddr) {
 			s.logger.Printf("rejected request from %s", r.RemoteAddr)

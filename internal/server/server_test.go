@@ -18,7 +18,7 @@ func newTestServer(t *testing.T, maxSize int64) (*httptest.Server, *Storage) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := New(st, maxSize, log.New(io.Discard, "", 0))
+	srv := New(st, maxSize, nil, log.New(io.Discard, "", 0))
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, st
@@ -84,7 +84,7 @@ func TestPutFromGlobalIPIsForbidden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := New(st, 1<<20, log.New(io.Discard, "", 0))
+	srv := New(st, 1<<20, nil, log.New(io.Discard, "", 0))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/files/a.txt", strings.NewReader("x"))
 	req.RemoteAddr = "203.0.113.5:12345" // spoof a global source address
