@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/capybara-translation/lanxfer/internal/peername"
 )
 
 const (
 	protocolVersion = 1
 	maxPacketSize   = 1024
-	maxNameLen      = 64
 	maxOSLen        = 32
 
 	typeQuery = "query"
@@ -33,20 +34,6 @@ type packet struct {
 	OS      string `json:"os,omitempty"`
 }
 
-// ValidateName reports whether name is acceptable as a peer name:
-// 1 to 64 bytes and free of control characters.
-func ValidateName(name string) error {
-	if name == "" || len(name) > maxNameLen {
-		return fmt.Errorf("peer name must be 1-%d bytes, got %d", maxNameLen, len(name))
-	}
-	for _, r := range name {
-		if r < 0x20 || r == 0x7F {
-			return fmt.Errorf("peer name %q contains a control character", name)
-		}
-	}
-	return nil
-}
-
 func validPort(port int) bool { return port >= 1 && port <= 65535 }
 
 func encodeQuery() []byte {
@@ -55,7 +42,7 @@ func encodeQuery() []byte {
 }
 
 func encodeReply(name string, port int, goos string) ([]byte, error) {
-	if err := ValidateName(name); err != nil {
+	if err := peername.Validate(name); err != nil {
 		return nil, err
 	}
 	if !validPort(port) {
@@ -81,7 +68,7 @@ func decode(b []byte) (packet, error) {
 	switch p.Type {
 	case typeQuery:
 	case typeReply:
-		if ValidateName(p.Name) != nil || !validPort(p.Port) || len(p.OS) > maxOSLen {
+		if peername.Validate(p.Name) != nil || !validPort(p.Port) || len(p.OS) > maxOSLen {
 			return packet{}, fmt.Errorf("%w: bad reply fields", errInvalidPacket)
 		}
 	default:

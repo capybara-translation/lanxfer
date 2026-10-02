@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/capybara-translation/lanxfer/internal/discovery"
+	"github.com/capybara-translation/lanxfer/internal/peername"
 	"github.com/capybara-translation/lanxfer/internal/server"
 )
 
@@ -74,13 +75,13 @@ func runRecv(args []string) error {
 // given, otherwise the hostname without its ".local" suffix.
 func peerName(flagValue, hostname string) (string, error) {
 	if flagValue != "" {
-		if err := discovery.ValidateName(flagValue); err != nil {
+		if err := peername.Validate(flagValue); err != nil {
 			return "", err
 		}
 		return flagValue, nil
 	}
 	name := strings.TrimSuffix(hostname, ".local")
-	if discovery.ValidateName(name) != nil {
+	if peername.Validate(name) != nil {
 		return "lanxfer", nil
 	}
 	return name, nil

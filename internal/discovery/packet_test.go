@@ -62,16 +62,3 @@ func TestDecodeRejectsInvalid(t *testing.T) {
 		}
 	}
 }
-
-func TestValidateName(t *testing.T) {
-	for _, ok := range []string{"mac2", "Junya's MacBook", "日本語", strings.Repeat("a", 64)} {
-		if err := ValidateName(ok); err != nil {
-			t.Errorf("ValidateName(%q) = %v, want nil", ok, err)
-		}
-	}
-	for _, bad := range []string{"", strings.Repeat("a", 65), "tab\there", "nul\x00"} {
-		if err := ValidateName(bad); err == nil {
-			t.Errorf("ValidateName(%q) = nil, want error", bad)
-		}
-	}
-}
