@@ -24,6 +24,8 @@ func main() {
 		err = runSend(os.Args[2:])
 	case "peers":
 		err = runPeers(os.Args[2:])
+	case "say":
+		err = runSay(os.Args[2:])
 	case "version", "--version":
 		fmt.Println("lanxfer " + version)
 		return
@@ -45,5 +47,6 @@ func usage() {
   lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>] [--name <name>]
   lanxfer peers [--port 8425] [--wait 1s]
   lanxfer send [--port 8425] <ip-or-name> <file>
+  lanxfer say [--port 8425] [--name <name>] <ip-or-name> [text...]
   lanxfer --version`)
 }
