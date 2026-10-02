@@ -25,7 +25,14 @@ func startReceiver(t *testing.T) (host string, port int, dir string) {
 	}
 	ts := httptest.NewServer(server.New(st, 1<<20, nil, log.New(io.Discard, "", 0)).Handler())
 	t.Cleanup(ts.Close)
-	u, err := url.Parse(ts.URL)
+	h, p := splitHostPort(t, ts.URL)
+	return h, p, st.Dir
+}
+
+// splitHostPort extracts the host and port of a test server URL.
+func splitHostPort(t *testing.T, rawURL string) (string, int) {
+	t.Helper()
+	u, err := url.Parse(rawURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +40,11 @@ func startReceiver(t *testing.T) (host string, port int, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	portNum, err := strconv.Atoi(p)
+	port, err := strconv.Atoi(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h, portNum, st.Dir
+	return h, port
 }
 
 func TestSendRoundtrip(t *testing.T) {

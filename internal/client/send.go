@@ -54,26 +54,16 @@ func Send(host string, port int, path string) (*Result, error) {
 	req.ContentLength = info.Size()
 	req.Header.Set("Content-Type", "application/octet-stream")
 
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			// Time out only the connection attempt. Client.Timeout would
-			// bound the whole exchange and cut off large transfers.
-			DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-		},
-	}
-
 	start := time.Now()
-	resp, err := httpClient.Do(req)
+	resp, err := newHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send to %s: %w", u.Host, err)
 	}
 	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("server %s returned %s: %s",
-			u.Host, resp.Status, strings.TrimSpace(string(body)))
+		return nil, responseError(u.Host, resp)
 	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 
 	return &Result{
 		RemoteName: strings.TrimSpace(string(body)),
