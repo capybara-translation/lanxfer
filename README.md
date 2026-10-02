@@ -5,12 +5,14 @@ home LAN, with no relay server in between.
 
 lanxfer is a small, dependency-free Go CLI. Run `lanxfer recv` on the machine
 that should receive, then `lanxfer send <name> <file>` on the machine that has
-the file. Receivers are found automatically on the local network.
+the file. Receivers are found automatically on the local network. Short text
+can be sent the same way with `lanxfer say`.
 
 ## Status
 
-Early but usable: single-file transfer, automatic peer discovery, and sending
-by name. No progress bar, no directory transfer, and no encryption yet.
+Early but usable: single-file transfer, short text messages, automatic peer
+discovery, and sending by name. No progress bar, no directory transfer, and no
+encryption yet.
 
 ## Usage
 
@@ -48,6 +50,25 @@ If a file with the same name already exists on the receiver, the new one is
 saved as `movie (1).mp4`, `movie (2).mp4`, and so on. Existing files are
 never overwritten.
 
+### Sending text
+
+To send short text, use `say` instead of `send`:
+
+    lanxfer say [--port 8425] [--name <name>] <ip-or-name> [text...]
+
+    lanxfer say mac2 "hello"
+    pbpaste | lanxfer say mac2
+
+Without text arguments, `say` reads stdin. Text is limited to 1 MiB; send
+anything larger as a file. The receiver prints each message and appends it to
+`messages.log` in its save directory:
+
+    --- 2026-09-30 10:12:03 from mac1 (192.168.1.10) ---
+    hello
+
+The sender's name defaults to its hostname (`--name` overrides it) and is
+always shown next to its IP address.
+
 ## Security notes
 
 **lanxfer has no authentication and no encryption. Use it only on a LAN you
@@ -67,6 +88,10 @@ Built-in protections:
   leaves a truncated file that looks complete.
 - Uploads larger than `--max-size` are rejected before any data is read.
 - The save directory is created with mode `0700` and files with `0600`.
+- Received text is printed and logged with control characters (other than
+  newline and tab) and bidirectional formatting characters replaced by
+  visible escapes such as `\x1b`, so a sender cannot move the cursor,
+  recolor, hide, or reorder what appears on the receiver's terminal.
 - Discovery replies reveal only the receiver's name, port, and OS, and are
   sent only to private, link-local, or loopback addresses.
 
@@ -119,6 +144,20 @@ large, `500` storage error.
 Because it is plain HTTP, you can test a receiver with curl:
 
     curl -T file.bin http://192.168.1.20:8425/files/file.bin
+
+### Text messages
+
+    POST /messages
+    Content-Type: text/plain; charset=utf-8
+    X-Lanxfer-From: mac1
+
+    <UTF-8 text, at most 1 MiB>
+
+Responses: `204` delivered, `400` empty or not UTF-8, `403` disallowed source
+address, `413` too large, `500` could not be stored. A missing or invalid
+`X-Lanxfer-From` is ignored and only the IP address is shown.
+
+    curl --data-binary 'hello' -H 'X-Lanxfer-From: curl' http://192.168.1.20:8425/messages
 
 ### Discovery
 
@@ -178,7 +217,7 @@ Requires the Go version declared in `go.mod`. No third-party dependencies.
 1. ~~TCP/HTTP file transfer to an IP address~~
 2. ~~Peer discovery on the LAN (`lanxfer peers`)~~
 3. ~~Send by peer name (`lanxfer send mac2 file.zip`)~~
-4. Send short text between machines (`lanxfer say mac2 "hello"`)
+4. ~~Send short text between machines (`lanxfer say mac2 "hello"`)~~
 5. Progress display and cancellation
 6. Directory transfer
 7. Device pairing and TLS
