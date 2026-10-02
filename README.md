@@ -1,7 +1,7 @@
 # lanxfer
 
-**LAN transfer** — send a file directly from one machine to another on your
-home LAN, with no relay server in between.
+**LAN transfer** — send files and messages directly between machines on your
+LAN, with no server in between.
 
 lanxfer is a small, dependency-free Go CLI. Run `lanxfer recv` on the machine
 that should receive, then `lanxfer send <name> <file>` on the machine that has
