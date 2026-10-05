@@ -106,8 +106,14 @@ safe to delete.
 
 ## Troubleshooting
 
-If a machine does not show up in `lanxfer peers`, files sent to it will not
-arrive either: the same network path is blocked. Check on that machine:
+If a machine does not show up in `lanxfer peers`, try sending to its IP
+address instead of its name. Discovery relies on broadcast, which Wi-Fi
+delivers less reliably than the direct connections used for sending. Some
+machines, Macs in particular, can miss broadcasts for minutes at a time while
+still receiving files and messages sent to their IP address.
+
+If sending to the IP address fails too, something is blocking the connection.
+Check on that machine:
 
 - **VPN.** Some VPN clients block local-network traffic, depending on their
   state and policy (for example while the tunnel is being established).
