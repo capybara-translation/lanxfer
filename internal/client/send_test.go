@@ -1,14 +1,19 @@
 package client_test
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/capybara-translation/lanxfer/internal/client"
@@ -55,7 +60,7 @@ func TestSendRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := client.Send(host, port, src)
+	res, err := client.Send(context.Background(), host, port, src, client.SendOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +87,7 @@ func TestSendJapaneseFilename(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := client.Send(host, port, src)
+	res, err := client.Send(context.Background(), host, port, src, client.SendOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,14 +101,14 @@ func TestSendJapaneseFilename(t *testing.T) {
 
 func TestSendMissingFile(t *testing.T) {
 	host, port, _ := startReceiver(t)
-	if _, err := client.Send(host, port, "/no/such/file.bin"); err == nil {
+	if _, err := client.Send(context.Background(), host, port, "/no/such/file.bin", client.SendOptions{}); err == nil {
 		t.Fatal("want error for missing file")
 	}
 }
 
 func TestSendDirectoryIsRejected(t *testing.T) {
 	host, port, _ := startReceiver(t)
-	if _, err := client.Send(host, port, t.TempDir()); err == nil {
+	if _, err := client.Send(context.Background(), host, port, t.TempDir(), client.SendOptions{}); err == nil {
 		t.Fatal("want error for directory")
 	}
 }
@@ -115,7 +120,7 @@ func TestSendServerErrorIsReported(t *testing.T) {
 	if err := os.WriteFile(src, make([]byte, 2<<20), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Send(host, port, src); err == nil {
+	if _, err := client.Send(context.Background(), host, port, src, client.SendOptions{}); err == nil {
 		t.Fatal("want error when server rejects upload")
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -136,7 +141,98 @@ func TestSendConnectionRefused(t *testing.T) {
 	if err := os.WriteFile(src, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Send("127.0.0.1", port, src); err == nil {
+	if _, err := client.Send(context.Background(), "127.0.0.1", port, src, client.SendOptions{}); err == nil {
 		t.Fatal("want error when nothing is listening")
+	}
+}
+
+func TestSendReportsProgress(t *testing.T) {
+	host, port, _ := startReceiver(t)
+	src := filepath.Join(t.TempDir(), "src.bin")
+	const size = 100_000
+	if err := os.WriteFile(src, make([]byte, size), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	var calls int
+	var lastSent, lastTotal int64
+	_, err := client.Send(context.Background(), host, port, src, client.SendOptions{
+		Progress: func(sent, total int64) {
+			mu.Lock()
+			defer mu.Unlock()
+			calls++
+			lastSent, lastTotal = sent, total
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls == 0 || lastSent != size || lastTotal != size {
+		t.Errorf("calls = %d, last = (%d, %d), want at least one call ending at (%d, %d)",
+			calls, lastSent, lastTotal, size, size)
+	}
+}
+
+func TestSendCancel(t *testing.T) {
+	// A receiver that never answers, so only cancellation can end the request.
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(release) }) // runs before ts.Close
+	host, port := splitHostPort(t, ts.URL)
+
+	src := filepath.Join(t.TempDir(), "src.bin")
+	if err := os.WriteFile(src, make([]byte, 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := client.Send(ctx, host, port, src, client.SendOptions{
+		Progress: func(int64, int64) { cancel() }, // cancel once sending is under way
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestSendFromHeader(t *testing.T) {
+	got := make(chan string, 2)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		v, ok := r.Header[server.FromHeader]
+		if !ok {
+			got <- "(absent)"
+		} else {
+			got <- v[0]
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprintln(w, "x.bin")
+	}))
+	t.Cleanup(ts.Close)
+	host, port := splitHostPort(t, ts.URL)
+
+	src := filepath.Join(t.TempDir(), "x.bin")
+	if err := os.WriteFile(src, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct{ from, want string }{
+		{"mac1", "mac1"},
+		{"", "(absent)"},
+	} {
+		if _, err := client.Send(context.Background(), host, port, src, client.SendOptions{From: tt.from}); err != nil {
+			t.Fatal(err)
+		}
+		if h := <-got; h != tt.want {
+			t.Errorf("From %q: header = %q, want %q", tt.from, h, tt.want)
+		}
 	}
 }

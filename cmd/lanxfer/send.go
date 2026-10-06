@@ -39,7 +39,7 @@ func runSend(args []string) error {
 	}
 
 	fmt.Printf("sending %s -> %s\n", filepath.Base(path), dest)
-	res, err := client.Send(addr.Addr().String(), int(addr.Port()), path)
+	res, err := client.Send(context.Background(), addr.Addr().String(), int(addr.Port()), path, client.SendOptions{})
 	if err != nil {
 		return err
 	}
