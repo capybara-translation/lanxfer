@@ -1,14 +1,19 @@
 package server
 
 import (
+	"bytes"
+	"errors"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 // newTestServer starts a test HTTP server saving into a temp directory.
@@ -105,5 +110,108 @@ func TestPutTraversalNeverStoresFile(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(st.Dir); len(entries) != 0 {
 		t.Errorf("dir not empty after traversal attempt")
+	}
+}
+
+// newLoggingHandler returns a handler whose log lines go to the returned
+// buffer. Tests call ServeHTTP directly, so the handler runs on the test
+// goroutine.
+func newLoggingHandler(t *testing.T) (http.Handler, *bytes.Buffer) {
+	t.Helper()
+	st, err := NewStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	return New(st, 1<<20, nil, log.New(&logs, "", 0)).Handler(), &logs
+}
+
+// serveUpload sends a PUT for name from 192.168.68.53 straight to h.
+func serveUpload(h http.Handler, name, from string, body io.Reader, size int64) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPut, "/files/"+url.PathEscape(name), body)
+	req.ContentLength = size
+	req.RemoteAddr = "192.168.68.53:5555"
+	if from != "" {
+		req.Header.Set(FromHeader, from)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestPutLogsStartAndFinish(t *testing.T) {
+	tests := []struct{ name, from, who string }{
+		{"named sender", "mac1", "mac1 (192.168.68.53)"},
+		{"no name", "", "192.168.68.53"},
+		{"invalid name is dropped", "bad\tname", "192.168.68.53"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, logs := newLoggingHandler(t)
+			rec := serveUpload(h, "a.txt", tt.from, strings.NewReader("hello"), 5)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d, want 201", rec.Code)
+			}
+			want := `receiving "a.txt" (5 B) from ` + tt.who + "\n" +
+				`received "a.txt" (5 B) from ` + tt.who + "\n"
+			if logs.String() != want {
+				t.Errorf("logs = %q, want %q", logs.String(), want)
+			}
+		})
+	}
+}
+
+func TestPutLogsRenamedName(t *testing.T) {
+	h, logs := newLoggingHandler(t)
+	serveUpload(h, "a.txt", "", strings.NewReader("one"), 3)
+	serveUpload(h, "a.txt", "", strings.NewReader("two"), 3)
+	if want := `received "a (1).txt" (3 B) from 192.168.68.53`; !strings.Contains(logs.String(), want) {
+		t.Errorf("logs = %q, want a line %q", logs.String(), want)
+	}
+}
+
+func TestPutLogsFailure(t *testing.T) {
+	h, logs := newLoggingHandler(t)
+	// 10 bytes declared, 3 arrive, then the connection breaks.
+	body := io.MultiReader(strings.NewReader("abc"), iotest.ErrReader(errors.New("connection reset")))
+	rec := serveUpload(h, "a.txt", "mac1", body, 10)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	want := `failed to receive "a.txt" from mac1 (192.168.68.53) after 3 B of 10 B: `
+	if len(lines) != 2 || !strings.HasPrefix(lines[1], want) {
+		t.Errorf("logs = %q, want a second line starting with %q", logs.String(), want)
+	}
+}
+
+func TestPutRejectedNameLogsNothing(t *testing.T) {
+	h, logs := newLoggingHandler(t)
+	rec := serveUpload(h, "CON", "", strings.NewReader("x"), 1)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("logs = %q, want nothing for a rejected name", logs.String())
+	}
+}
+
+func TestPutLogsEscapeReorderingCharacters(t *testing.T) {
+	// RIGHT-TO-LEFT OVERRIDE makes "a<RLO>txt.exe" display as "aexe.txt".
+	rlo := string(rune(0x202E))
+	h, logs := newLoggingHandler(t)
+	rec := serveUpload(h, "a"+rlo+"txt.exe", "mac"+rlo+"1", strings.NewReader("x"), 1)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", rec.Code)
+	}
+	if strings.ContainsRune(logs.String(), 0x202E) {
+		t.Errorf("logs contain a raw U+202E: %q", logs.String())
+	}
+	// The escaped filename and sender must still be present, not dropped.
+	if want := strconv.Quote("a" + rlo + "txt.exe"); !strings.Contains(logs.String(), want) {
+		t.Errorf("logs = %q, want the quoted filename %s", logs.String(), want)
+	}
+	if want := sanitize("mac"+rlo+"1") + " (192.168.68.53)"; !strings.Contains(logs.String(), want) {
+		t.Errorf("logs = %q, want the escaped sender %q", logs.String(), want)
 	}
 }

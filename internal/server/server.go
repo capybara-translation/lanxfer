@@ -3,10 +3,13 @@ package server
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/netip"
 
 	"github.com/capybara-translation/lanxfer/internal/humanize"
+	"github.com/capybara-translation/lanxfer/internal/peername"
 )
 
 // Server holds the HTTP handlers of the receiving side.
@@ -54,9 +57,18 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 			http.StatusRequestEntityTooLarge)
 		return
 	}
-	// Guard against clients that send more bytes than they declared.
-	body := http.MaxBytesReader(w, r.Body, s.maxSize)
+	// Check the name before announcing the transfer, so a rejected request
+	// never shows up as "receiving". Save checks it again.
+	if err := ValidateFilename(name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	from := senderLabel(r)
+	// Guard against clients that send more bytes than they declared, and
+	// count what arrives for the failure log.
+	body := &countingReader{r: http.MaxBytesReader(w, r.Body, s.maxSize)}
 
+	s.logger.Printf("receiving %q (%s) from %s", name, humanize.Bytes(r.ContentLength), from)
 	finalName, err := s.storage.Save(name, body, r.ContentLength)
 	if err != nil {
 		var maxErr *http.MaxBytesError
@@ -66,14 +78,41 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &maxErr):
 			http.Error(w, "file too large", http.StatusRequestEntityTooLarge)
 		default:
-			s.logger.Printf("save %q from %s failed: %v", name, r.RemoteAddr, err)
+			s.logger.Printf("failed to receive %q from %s after %s of %s: %v",
+				name, from, humanize.Bytes(body.n), humanize.Bytes(r.ContentLength), err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return
 	}
 
-	s.logger.Printf("received %s (%s) from %s",
-		finalName, humanize.Bytes(r.ContentLength), r.RemoteAddr)
+	s.logger.Printf("received %q (%s) from %s", finalName, humanize.Bytes(r.ContentLength), from)
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintln(w, finalName)
+}
+
+// senderLabel names the sender of r for log lines: "mac1 (192.168.68.53)"
+// when it declared a valid name, otherwise just the IP. The name is
+// self-declared, so it is sanitized like a message sender's name.
+func senderLabel(r *http.Request) string {
+	ip := r.RemoteAddr
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		ip = ap.Addr().Unmap().String()
+	}
+	from := r.Header.Get(FromHeader)
+	if peername.Validate(from) != nil {
+		return ip
+	}
+	return fmt.Sprintf("%s (%s)", sanitize(from), ip)
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
