@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ErrInvalidFilename is a sentinel error indicating that a received filename
@@ -57,8 +58,16 @@ func ValidateFilename(name string) error {
 	if _, ok := windowsReserved[strings.ToUpper(name)]; ok {
 		return fmt.Errorf("%w: %q is a reserved name on Windows", ErrInvalidFilename, name)
 	}
+	// Startup cleanup deletes stale files with this name, so a received file
+	// must never carry it.
+	if ok, _ := filepath.Match(partPattern, name); ok {
+		return fmt.Errorf("%w: %q is reserved for temporary files", ErrInvalidFilename, name)
+	}
 	return nil
 }
+
+// partPattern names the temporary files Save writes into.
+const partPattern = ".lanxfer-*.part"
 
 // Storage manages the directory that received files are saved into.
 // Invariant: every (non-.part) file directly under Dir is a completely
@@ -84,7 +93,7 @@ func (s *Storage) Save(name string, r io.Reader, size int64) (string, error) {
 		return "", err
 	}
 
-	tmp, err := os.CreateTemp(s.Dir, ".lanxfer-*.part")
+	tmp, err := os.CreateTemp(s.Dir, partPattern)
 	if err != nil {
 		return "", fmt.Errorf("create temp file: %w", err)
 	}
@@ -159,4 +168,41 @@ func numberedName(name string, i int) string {
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
 	return fmt.Sprintf("%s (%d)%s", stem, i, ext)
+}
+
+// RemoveStaleParts deletes temporary files left behind by transfers that
+// ended without cleaning up, such as when the receiver was killed or the
+// machine lost power. Only files untouched for at least olderThan are
+// removed: a transfer still being written by another receiver sharing the
+// directory keeps updating its file and is left alone. It returns how many
+// files were removed; a file that cannot be removed is reported in the
+// error without stopping the sweep.
+func (s *Storage) RemoveStaleParts(olderThan time.Duration) (int, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	var errs []error
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			continue
+		}
+		if ok, _ := filepath.Match(partPattern, e.Name()); !ok {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue // removed in the meantime
+		}
+		if time.Since(info.ModTime()) < olderThan {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.Dir, e.Name())); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		removed++
+	}
+	return removed, errors.Join(errs...)
 }

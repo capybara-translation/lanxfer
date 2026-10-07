@@ -23,6 +23,10 @@ import (
 // remove their temporary files before exiting.
 const shutdownWait = 5 * time.Second
 
+// staleAfter is how long a temporary file must sit untouched before recv
+// treats it as left over from a dead transfer.
+const staleAfter = 10 * time.Minute
+
 func runRecv(args []string) error {
 	fs := flag.NewFlagSet("recv", flag.ExitOnError)
 	dir := fs.String("dir", "", "save directory (default: ~/lanxfer)")
@@ -53,6 +57,14 @@ func runRecv(args []string) error {
 	}
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
+
+	n, err := st.RemoveStaleParts(staleAfter)
+	if n > 0 {
+		logger.Printf("removed %d stale partial file(s)", n)
+	}
+	if err != nil {
+		logger.Printf("warning: could not remove stale partial files: %v", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

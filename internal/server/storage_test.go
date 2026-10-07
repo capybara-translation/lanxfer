@@ -4,8 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateFilename(t *testing.T) {
@@ -43,6 +45,7 @@ func TestValidateFilename(t *testing.T) {
 		"trailing-dot.",          // Windows rejects trailing dots
 		"trailing-space ",        // Windows rejects trailing spaces
 		strings.Repeat("a", 256), // too long
+		".lanxfer-123.part",      // reserved for temporary files
 	}
 	for _, name := range invalid {
 		err := ValidateFilename(name)
@@ -133,5 +136,43 @@ func TestSaveRejectsBadName(t *testing.T) {
 	}
 	if got := listFiles(t, st.Dir); len(got) != 0 {
 		t.Errorf("dir contains %v, want empty", got)
+	}
+}
+
+func TestRemoveStaleParts(t *testing.T) {
+	st, err := NewStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-11 * time.Minute)
+	write := func(name string, mtime time.Time) {
+		t.Helper()
+		p := filepath.Join(st.Dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".lanxfer-111.part", old)                   // left by a dead transfer
+	write(".lanxfer-222.part", time.Now())            // still being written
+	write("movie.mp4", old)                           // a received file, however old
+	write("notes.part", old)                          // not ours
+	dir := filepath.Join(st.Dir, ".lanxfer-dir.part") // matches the name but is not a file
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(dir, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := st.RemoveStaleParts(10 * time.Minute)
+	if err != nil || n != 1 {
+		t.Fatalf("RemoveStaleParts = %d, %v; want 1, nil", n, err)
+	}
+	want := []string{".lanxfer-222.part", ".lanxfer-dir.part", "movie.mp4", "notes.part"}
+	if got := listFiles(t, st.Dir); !slices.Equal(got, want) {
+		t.Errorf("left %v, want %v", got, want)
 	}
 }
