@@ -2,9 +2,12 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +17,7 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
+	"time"
 )
 
 // newTestServer starts a test HTTP server saving into a temp directory.
@@ -213,5 +217,58 @@ func TestPutLogsEscapeReorderingCharacters(t *testing.T) {
 	}
 	if want := sanitize("mac"+rlo+"1") + " (192.168.68.53)"; !strings.Contains(logs.String(), want) {
 		t.Errorf("logs = %q, want the escaped sender %q", logs.String(), want)
+	}
+}
+
+// partFiles lists the temporary upload files in dir.
+func partFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	var parts []string
+	for _, name := range listFiles(t, dir) {
+		if strings.HasPrefix(name, ".lanxfer-") && strings.HasSuffix(name, ".part") {
+			parts = append(parts, name)
+		}
+	}
+	return parts
+}
+
+// waitFor polls cond until it holds, failing the test after 2 seconds.
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met within 2s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestWaitUploadsCoversCleanupAfterClose(t *testing.T) {
+	st, err := NewStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, 1<<20, nil, log.New(io.Discard, "", 0))
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	// Start an upload that declares 1000 bytes but sends only a few.
+	conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "PUT /files/big.bin HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\npartial")
+	waitFor(t, func() bool { return len(partFiles(t, st.Dir)) == 1 })
+
+	ts.CloseClientConnections() // what http.Server.Close does to live transfers
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.WaitUploads(ctx); err != nil {
+		t.Fatalf("WaitUploads = %v", err)
+	}
+	if got := partFiles(t, st.Dir); len(got) != 0 {
+		t.Errorf("left behind %v", got)
 	}
 }

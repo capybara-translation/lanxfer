@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,13 +19,22 @@ type Server struct {
 	maxSize int64
 	inbox   *Inbox
 	logger  *log.Logger
+	uploads *inflight
 }
 
 // New creates a receive server. maxSize is the maximum number of bytes
 // accepted for a single file. Text messages are delivered to inbox; if it is
 // nil, the server does not accept them.
 func New(storage *Storage, maxSize int64, inbox *Inbox, logger *log.Logger) *Server {
-	return &Server{storage: storage, maxSize: maxSize, inbox: inbox, logger: logger}
+	return &Server{storage: storage, maxSize: maxSize, inbox: inbox, logger: logger, uploads: newInflight()}
+}
+
+// WaitUploads blocks until no upload is being received, or ctx ends.
+// Closing the HTTP server makes every upload in progress fail and delete its
+// temporary file; waiting here lets that cleanup finish before the process
+// exits.
+func (s *Server) WaitUploads(ctx context.Context) error {
+	return s.uploads.wait(ctx)
 }
 
 // Handler returns the routed http.Handler. Every request passes through the
@@ -67,6 +77,9 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	// Guard against clients that send more bytes than they declared, and
 	// count what arrives for the failure log.
 	body := &countingReader{r: http.MaxBytesReader(w, r.Body, s.maxSize)}
+
+	s.uploads.add()
+	defer s.uploads.done()
 
 	s.logger.Printf("receiving %q (%s) from %s", name, humanize.Bytes(r.ContentLength), from)
 	finalName, err := s.storage.Save(name, body, r.ContentLength)
