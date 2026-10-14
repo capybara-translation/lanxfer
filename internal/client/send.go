@@ -29,8 +29,9 @@ type SendOptions struct {
 	// From is the sender's peer name. It is left out of the request when empty.
 	From string
 	// Progress, if set, is called with the number of bytes read from the
-	// file so far and the file size. It runs on the HTTP client's
-	// goroutine, so it must be quick and safe for concurrent use.
+	// file so far and the file size. It is called from the HTTP client's
+	// goroutine, not the caller's, and possibly even shortly after Send
+	// returns, so it must be quick and safe to call from another goroutine.
 	Progress func(sent, total int64)
 }
 

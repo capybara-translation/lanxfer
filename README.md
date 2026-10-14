@@ -10,9 +10,9 @@ can be sent the same way with `lanxfer say`.
 
 ## Status
 
-Early but usable: single-file transfer, short text messages, automatic peer
-discovery, and sending by name. No progress bar, no directory transfer, and no
-encryption yet.
+Early but usable: single-file transfer with progress display, short text
+messages, automatic peer discovery, and sending by name. No directory transfer
+and no encryption yet.
 
 ## Usage
 
@@ -29,7 +29,7 @@ See who is receiving on your network:
 
 Sender, by name or by IP address:
 
-    lanxfer send [--port 8425] <ip-or-name> <file>
+    lanxfer send [--port 8425] [--name <name>] <ip-or-name> <file>
 
 Defaults: port `8425`, save directory `~/lanxfer`, maximum file size 50 GiB,
 name = hostname without `.local`. Names are matched case-insensitively. If a
@@ -45,6 +45,19 @@ Example:
     lanxfer send mac2 ~/Downloads/movie.mp4
     sending movie.mp4 -> mac2 (192.168.1.20:8425)
     done: 4.8 GiB in 41.2s (119.3 MiB/s)
+
+While the transfer runs, a progress line is shown below `sending` and is
+replaced by the `done` line when it finishes (it goes to stderr, and only when
+stderr is a terminal):
+
+      42%  2.0 GiB / 4.8 GiB  118.3 MiB/s  0:24 left
+
+Press Ctrl-C to cancel; the receiver discards the partial file. The receiver
+logs each transfer with the sender's name (`--name`, default hostname) next to
+its IP address:
+
+    2026/10/05 22:10:03 receiving "movie.mp4" (4.8 GiB) from mac1 (192.168.1.10)
+    2026/10/05 22:10:44 received "movie.mp4" (4.8 GiB) from mac1 (192.168.1.10)
 
 If a file with the same name already exists on the receiver, the new one is
 saved as `movie (1).mp4`, `movie (2).mp4`, and so on. Existing files are
@@ -81,7 +94,8 @@ Built-in protections:
   exposed to the internet, not a substitute for a firewall.
 - Filenames are validated; the receiver never writes outside its save
   directory (path traversal, absolute paths, and control characters are
-  rejected).
+  rejected, as are names of the form `.lanxfer-*.part`, which are reserved
+  for temporary files).
 - Existing files are never overwritten; collisions are renamed.
 - Files are written to a temporary `.part` file and renamed into place only
   after the full declared size has arrived, so an interrupted transfer never
@@ -100,9 +114,11 @@ receiver has a firewall, allow both TCP and UDP on that port. Names are
 self-declared and unauthenticated: anyone on the LAN can announce any name,
 so treat a name as a convenience, not as proof of identity.
 
-Known limitation: if the receiver process is killed (Ctrl-C) in the middle
-of a transfer, the in-progress `.lanxfer-*.part` file is left behind. It is
-safe to delete.
+Stopping either side with Ctrl-C during a transfer leaves nothing behind: the
+receiver deletes the partial file. If the receiver is killed forcibly or the
+machine loses power, a `.lanxfer-*.part` file can remain in the save
+directory; `lanxfer recv` deletes such files on startup once they have not
+been modified for 10 minutes.
 
 ## Troubleshooting
 
@@ -140,12 +156,16 @@ The receiver is a plain HTTP server. A transfer is a single request:
     PUT /files/<url-encoded-filename>
     Content-Length: <size>
     Content-Type: application/octet-stream
+    X-Lanxfer-From: mac1
 
     <raw file bytes>
 
 Responses: `201` (body contains the saved filename), `400` invalid filename,
 `403` disallowed source address, `411` missing Content-Length, `413` too
 large, `500` storage error.
+
+`X-Lanxfer-From` is optional and only used in the receiver's log; a missing
+or invalid one leaves just the IP address.
 
 Because it is plain HTTP, you can test a receiver with curl:
 
@@ -224,7 +244,7 @@ Requires the Go version declared in `go.mod`. No third-party dependencies.
 2. ~~Peer discovery on the LAN (`lanxfer peers`)~~
 3. ~~Send by peer name (`lanxfer send mac2 file.zip`)~~
 4. ~~Send short text between machines (`lanxfer say mac2 "hello"`)~~
-5. Progress display and cancellation
+5. ~~Progress display and cancellation~~
 6. Directory transfer
 7. Device pairing and TLS
 8. GUI with drag and drop

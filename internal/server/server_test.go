@@ -272,3 +272,22 @@ func TestWaitUploadsCoversCleanupAfterClose(t *testing.T) {
 		t.Errorf("left behind %v", got)
 	}
 }
+
+func TestPutFailureLogEscapesErrorText(t *testing.T) {
+	rlo := string(rune(0x202E))
+	h, logs := newLoggingHandler(t)
+	// The error text carries sender-controlled characters, as a wrapped
+	// path error would.
+	boom := "boom" + rlo + "txt"
+	body := io.MultiReader(strings.NewReader("abc"), iotest.ErrReader(errors.New(boom)))
+	rec := serveUpload(h, "a.txt", "", body, 10)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if strings.ContainsRune(logs.String(), 0x202E) {
+		t.Errorf("logs contain a raw U+202E: %q", logs.String())
+	}
+	if want := sanitize(boom); !strings.Contains(logs.String(), want) {
+		t.Errorf("logs = %q, want them to contain %q", logs.String(), want)
+	}
+}

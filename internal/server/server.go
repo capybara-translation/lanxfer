@@ -91,8 +91,8 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 		case errors.As(err, &maxErr):
 			http.Error(w, "file too large", http.StatusRequestEntityTooLarge)
 		default:
-			s.logger.Printf("failed to receive %q from %s after %s of %s: %v",
-				name, from, humanize.Bytes(body.n), humanize.Bytes(r.ContentLength), err)
+			s.logger.Printf("failed to receive %q from %s after %s of %s: %s",
+				name, from, humanize.Bytes(body.n), humanize.Bytes(r.ContentLength), sanitize(err.Error()))
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return
