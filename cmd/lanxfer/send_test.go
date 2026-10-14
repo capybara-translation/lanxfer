@@ -33,7 +33,7 @@ var (
 
 func TestResolveTargetIPLiteralSkipsDiscovery(t *testing.T) {
 	calls := stubDiscover(t, nil, errors.New("must not be called"))
-	addr, byName, err := resolveTarget("192.168.68.54", 8425)
+	addr, byName, err := resolveTarget(context.Background(), "192.168.68.54", 8425)
 	if err != nil || byName || addr.String() != "192.168.68.54:8425" {
 		t.Errorf("got %v, %v, %v", addr, byName, err)
 	}
@@ -44,7 +44,7 @@ func TestResolveTargetIPLiteralSkipsDiscovery(t *testing.T) {
 
 func TestResolveTargetByNameIsCaseInsensitive(t *testing.T) {
 	stubDiscover(t, []discovery.Peer{mac2, ubuntu}, nil)
-	addr, byName, err := resolveTarget("UBUNTU", 8425)
+	addr, byName, err := resolveTarget(context.Background(), "UBUNTU", 8425)
 	if err != nil || !byName {
 		t.Fatalf("got %v, %v, %v", addr, byName, err)
 	}
@@ -56,7 +56,7 @@ func TestResolveTargetByNameIsCaseInsensitive(t *testing.T) {
 
 func TestResolveTargetNoMatch(t *testing.T) {
 	stubDiscover(t, []discovery.Peer{mac2}, nil)
-	_, _, err := resolveTarget("winbox", 8425)
+	_, _, err := resolveTarget(context.Background(), "winbox", 8425)
 	if err == nil || !strings.Contains(err.Error(), `no peer named "winbox"`) {
 		t.Errorf("err = %v", err)
 	}
@@ -64,7 +64,7 @@ func TestResolveTargetNoMatch(t *testing.T) {
 
 func TestResolveTargetAmbiguous(t *testing.T) {
 	stubDiscover(t, []discovery.Peer{mac2, mac2b}, nil)
-	_, _, err := resolveTarget("mac2", 8425)
+	_, _, err := resolveTarget(context.Background(), "mac2", 8425)
 	if err == nil || !strings.Contains(err.Error(), "192.168.68.54") || !strings.Contains(err.Error(), "192.168.68.77") {
 		t.Errorf("err = %v, want both candidates listed", err)
 	}
@@ -72,13 +72,25 @@ func TestResolveTargetAmbiguous(t *testing.T) {
 
 func TestResolveTargetDiscoveryError(t *testing.T) {
 	stubDiscover(t, nil, discovery.ErrNoNetwork)
-	if _, _, err := resolveTarget("mac2", 8425); !errors.Is(err, discovery.ErrNoNetwork) {
+	if _, _, err := resolveTarget(context.Background(), "mac2", 8425); !errors.Is(err, discovery.ErrNoNetwork) {
 		t.Errorf("err = %v, want ErrNoNetwork", err)
 	}
 }
 
 func TestResolveTargetBadPort(t *testing.T) {
-	if _, _, err := resolveTarget("192.168.68.54", 70000); !errors.Is(err, errUsage) {
+	if _, _, err := resolveTarget(context.Background(), "192.168.68.54", 70000); !errors.Is(err, errUsage) {
 		t.Errorf("err = %v, want errUsage", err)
+	}
+}
+
+func TestInterrupted(t *testing.T) {
+	other := errors.New("boom")
+	if got := interrupted(context.Background(), other); got != other {
+		t.Errorf("not cancelled: got %v, want %v", got, other)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := interrupted(ctx, other); !errors.Is(got, errCancelled) {
+		t.Errorf("cancelled: got %v, want errCancelled", got)
 	}
 }

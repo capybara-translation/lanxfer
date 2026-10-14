@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -27,7 +28,7 @@ func runSay(args []string) error {
 	}
 	target := rest[0]
 
-	text, err := messageText(rest[1:], os.Stdin, stdinIsTerminal())
+	text, err := messageText(rest[1:], os.Stdin, isTerminal(os.Stdin))
 	if err != nil {
 		return err
 	}
@@ -37,7 +38,7 @@ func runSay(args []string) error {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
 
-	addr, byName, err := resolveTarget(target, *port)
+	addr, byName, err := resolveTarget(context.Background(), target, *port)
 	if err != nil {
 		return err
 	}
@@ -80,9 +81,4 @@ func messageText(args []string, stdin io.Reader, stdinIsTerminal bool) (string, 
 		return "", errors.New("message is not valid UTF-8")
 	}
 	return text, nil
-}
-
-func stdinIsTerminal() bool {
-	info, err := os.Stdin.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

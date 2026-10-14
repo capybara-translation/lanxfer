@@ -17,3 +17,10 @@ func TestRunSendMissingArgsIsUsageError(t *testing.T) {
 		}
 	}
 }
+
+func TestRunSendBadNameIsUsageError(t *testing.T) {
+	err := runSend([]string{"--name", "bad\tname", "192.168.1.10", "a.txt"})
+	if !errors.Is(err, errUsage) {
+		t.Errorf("err = %v, want errUsage", err)
+	}
+}

@@ -10,6 +10,10 @@ import (
 // with status 2, distinguishing it from runtime failures (status 1).
 var errUsage = errors.New("invalid usage")
 
+// errCancelled marks an operation the user interrupted with Ctrl-C. main
+// exits with status 130, the shell convention for termination by SIGINT.
+var errCancelled = errors.New("cancelled")
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -34,9 +38,12 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "lanxfer:", err)
-		if errors.Is(err, errUsage) {
+		switch {
+		case errors.Is(err, errUsage):
 			usage()
 			os.Exit(2)
+		case errors.Is(err, errCancelled):
+			os.Exit(130)
 		}
 		os.Exit(1)
 	}
@@ -46,7 +53,14 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   lanxfer recv [--dir <path>] [--port 8425] [--max-size <bytes>] [--name <name>]
   lanxfer peers [--port 8425] [--wait 1s]
-  lanxfer send [--port 8425] <ip-or-name> <file>
+  lanxfer send [--port 8425] [--name <name>] <ip-or-name> <file>
   lanxfer say [--port 8425] [--name <name>] <ip-or-name> [text...]
   lanxfer --version`)
+}
+
+// isTerminal reports whether f is an interactive terminal rather than a
+// pipe or a file.
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
