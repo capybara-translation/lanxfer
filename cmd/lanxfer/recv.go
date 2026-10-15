@@ -60,10 +60,10 @@ func runRecv(args []string) error {
 
 	n, err := st.RemoveStaleParts(staleAfter)
 	if n > 0 {
-		logger.Printf("removed %d stale partial file(s)", n)
+		logger.Printf("removed %d stale partial transfer(s)", n)
 	}
 	if err != nil {
-		logger.Printf("warning: could not remove stale partial files: %v", err)
+		logger.Printf("warning: could not remove stale partial transfers: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

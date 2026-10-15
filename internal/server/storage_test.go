@@ -139,40 +139,112 @@ func TestSaveRejectsBadName(t *testing.T) {
 	}
 }
 
+func TestNumberedName(t *testing.T) {
+	tests := []struct {
+		name  string
+		i     int
+		isDir bool
+		want  string
+	}{
+		{"a.txt", 0, false, "a.txt"},
+		{"a.txt", 1, false, "a (1).txt"},
+		{"trip", 0, true, "trip"},
+		{"trip", 2, true, "trip (2)"},
+		{"photos.2024", 1, true, "photos.2024 (1)"}, // a dot in a folder name is not an extension
+	}
+	for _, tt := range tests {
+		if got := numberedName(tt.name, tt.i, tt.isDir); got != tt.want {
+			t.Errorf("numberedName(%q, %d, %v) = %q, want %q", tt.name, tt.i, tt.isDir, got, tt.want)
+		}
+	}
+}
+
 func TestRemoveStaleParts(t *testing.T) {
 	st, err := NewStorage(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-11 * time.Minute)
-	write := func(name string, mtime time.Time) {
+	touch := func(p string, mtime time.Time) {
 		t.Helper()
-		p := filepath.Join(st.Dir, name)
-		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
-		}
 		if err := os.Chtimes(p, mtime, mtime); err != nil {
 			t.Fatal(err)
 		}
 	}
-	write(".lanxfer-111.part", old)                   // left by a dead transfer
-	write(".lanxfer-222.part", time.Now())            // still being written
-	write("movie.mp4", old)                           // a received file, however old
-	write("notes.part", old)                          // not ours
-	dir := filepath.Join(st.Dir, ".lanxfer-dir.part") // matches the name but is not a file
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	write := func(rel string, mtime time.Time) {
+		t.Helper()
+		p := filepath.Join(st.Dir, rel)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		touch(p, mtime)
+	}
+	mkdir := func(rel string) string {
+		t.Helper()
+		p := filepath.Join(st.Dir, rel)
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	write(".lanxfer-111.part", old)        // a file left by a dead transfer
+	write(".lanxfer-222.part", time.Now()) // a file still being written
+	write("movie.mp4", old)                // a received file, however old
+	write("notes.part", old)               // not ours
+
+	deadDir := mkdir(".lanxfer-old.part") // a folder left by a dead transfer
+	write(".lanxfer-old.part/a.txt", old)
+
+	// A symbolic link inside a stale folder must be removed as a link, never
+	// followed: the directory it points to has to survive the sweep.
+	outside := t.TempDir()
+	keep := filepath.Join(outside, "keep.txt")
+	if err := os.WriteFile(keep, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chtimes(dir, old, old); err != nil {
+	escapeLink := filepath.Join(deadDir, "escape")
+	escapeOK := os.Symlink(outside, escapeLink) == nil
+	if !escapeOK {
+		t.Log("symlinks unavailable, skipping the escape-link case")
+	}
+	touch(deadDir, old) // after creating the link, which updates the folder's mtime
+
+	// The folder and its subfolders are old, but a file two levels down is
+	// being written, so only a full walk can tell the folder is still in use.
+	busyDir := mkdir(".lanxfer-busy.part")
+	deeper := filepath.Join(busyDir, "sub", "deeper")
+	if err := os.MkdirAll(deeper, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	write(".lanxfer-busy.part/sub/deeper/a.txt", time.Now())
+	touch(deeper, old)
+	touch(filepath.Join(busyDir, "sub"), old)
+	touch(busyDir, old)
+
+	want := []string{".lanxfer-222.part", ".lanxfer-busy.part", "movie.mp4", "notes.part"}
+
+	// A symbolic link with a matching name is never touched, nor is its target.
+	target := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(st.Dir, ".lanxfer-link.part")); err == nil {
+		want = []string{".lanxfer-222.part", ".lanxfer-busy.part", ".lanxfer-link.part", "movie.mp4", "notes.part"}
+	} else {
+		t.Logf("symlinks unavailable, skipping that case: %v", err)
 	}
 
 	n, err := st.RemoveStaleParts(10 * time.Minute)
-	if err != nil || n != 1 {
-		t.Fatalf("RemoveStaleParts = %d, %v; want 1, nil", n, err)
+	if err != nil || n != 2 {
+		t.Fatalf("RemoveStaleParts = %d, %v; want 2, nil", n, err)
 	}
-	want := []string{".lanxfer-222.part", ".lanxfer-dir.part", "movie.mp4", "notes.part"}
 	if got := listFiles(t, st.Dir); !slices.Equal(got, want) {
 		t.Errorf("left %v, want %v", got, want)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("symlink target was touched: %v", err)
+	}
+	if escapeOK {
+		if _, err := os.Stat(keep); err != nil {
+			t.Errorf("file behind a symlink inside a removed folder was touched: %v", err)
+		}
 	}
 }
