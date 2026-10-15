@@ -42,6 +42,7 @@ func (s *Server) WaitUploads(ctx context.Context) error {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /files/{name}", s.handlePut)
+	mux.HandleFunc("PUT /dirs/{name}", s.handlePutDir)
 	if s.inbox != nil {
 		mux.HandleFunc("POST /messages", s.handleMessage)
 	}
@@ -99,6 +100,50 @@ func (s *Server) handlePut(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Printf("received %q (%s) from %s", finalName, humanize.Bytes(r.ContentLength), from)
+	w.WriteHeader(http.StatusCreated)
+	fmt.Fprintln(w, finalName)
+}
+
+// handlePutDir receives a folder sent as a tar stream and extracts it under
+// a non-colliding name. Limits, logging and in-flight tracking match handlePut.
+func (s *Server) handlePutDir(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+
+	if r.ContentLength < 0 {
+		http.Error(w, "Content-Length required", http.StatusLengthRequired)
+		return
+	}
+	// The limit applies to the whole tar stream, not to each file in it.
+	if r.ContentLength > s.maxSize {
+		http.Error(w, fmt.Sprintf("folder too large (limit %s)", humanize.Bytes(s.maxSize)),
+			http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err := ValidateFilename(name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	from := senderLabel(r)
+	body := &countingReader{r: http.MaxBytesReader(w, r.Body, s.maxSize)}
+
+	s.uploads.add()
+	defer s.uploads.done()
+
+	s.logger.Printf("receiving folder %q (%s) from %s", name, humanize.Bytes(r.ContentLength), from)
+	finalName, files, err := s.storage.SaveDir(name, body, r.ContentLength)
+	if err != nil {
+		s.logger.Printf("failed to receive folder %q from %s after %s of %s: %s",
+			name, from, humanize.Bytes(body.n), humanize.Bytes(r.ContentLength), sanitize(err.Error()))
+		if errors.Is(err, ErrInvalidEntry) || errors.Is(err, ErrInvalidFilename) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	s.logger.Printf("received folder %q (%s, %s) from %s",
+		finalName, humanize.Plural(files, "file"), humanize.Bytes(r.ContentLength), from)
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintln(w, finalName)
 }

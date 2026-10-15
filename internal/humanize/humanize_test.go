@@ -19,3 +19,12 @@ func TestBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestPlural(t *testing.T) {
+	tests := map[int]string{0: "0 files", 1: "1 file", 152: "152 files"}
+	for n, want := range tests {
+		if got := Plural(n, "file"); got != want {
+			t.Errorf("Plural(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

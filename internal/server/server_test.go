@@ -1,6 +1,7 @@
 package server
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"errors"
@@ -18,6 +19,8 @@ import (
 	"testing"
 	"testing/iotest"
 	"time"
+
+	"github.com/capybara-translation/lanxfer/internal/humanize"
 )
 
 // newTestServer starts a test HTTP server saving into a temp directory.
@@ -289,5 +292,73 @@ func TestPutFailureLogEscapesErrorText(t *testing.T) {
 	}
 	if want := sanitize(boom); !strings.Contains(logs.String(), want) {
 		t.Errorf("logs = %q, want them to contain %q", logs.String(), want)
+	}
+}
+
+// serveDirUpload sends a folder PUT from 192.168.68.53 straight to h. A
+// negative size sends no Content-Length.
+func serveDirUpload(h http.Handler, name, from string, body io.Reader, size int64) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPut, "/dirs/"+url.PathEscape(name), body)
+	req.ContentLength = size
+	req.RemoteAddr = "192.168.68.53:5555"
+	if from != "" {
+		req.Header.Set(FromHeader, from)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestPutDirStoresAndLogs(t *testing.T) {
+	h, logs := newLoggingHandler(t)
+	data := buildTar(t, tarFile("a.txt", "a"))
+	rec := serveDirUpload(h, "trip", "mac1", bytes.NewReader(data), int64(len(data)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "trip" {
+		t.Errorf("body = %q, want trip", got)
+	}
+	size := humanize.Bytes(int64(len(data)))
+	want := `receiving folder "trip" (` + size + `) from mac1 (192.168.68.53)` + "\n" +
+		`received folder "trip" (1 file, ` + size + `) from mac1 (192.168.68.53)` + "\n"
+	if logs.String() != want {
+		t.Errorf("logs = %q, want %q", logs.String(), want)
+	}
+}
+
+func TestPutDirRejects(t *testing.T) {
+	data := buildTar(t, tarFile("a.txt", "a"))
+	link := buildTar(t, tarEntry{name: "l", typeflag: tar.TypeSymlink, linkname: "/etc", mtime: fileTime})
+	tests := map[string]struct {
+		name string
+		body []byte
+		size int64
+		code int
+	}{
+		"no Content-Length": {"trip", data, -1, http.StatusLengthRequired},
+		"too large":         {"trip", data, 2 << 20, http.StatusRequestEntityTooLarge}, // limit is 1 MiB
+		"bad folder name":   {"CON", data, int64(len(data)), http.StatusBadRequest},
+		"bad entry":         {"trip", link, int64(len(link)), http.StatusBadRequest},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			h, _ := newLoggingHandler(t)
+			rec := serveDirUpload(h, tt.name, "", bytes.NewReader(tt.body), tt.size)
+			if rec.Code != tt.code {
+				t.Errorf("status = %d, want %d", rec.Code, tt.code)
+			}
+		})
+	}
+}
+
+func TestPutDirLogsFailure(t *testing.T) {
+	h, logs := newLoggingHandler(t)
+	link := buildTar(t, tarEntry{name: "l", typeflag: tar.TypeSymlink, linkname: "/etc", mtime: fileTime})
+	serveDirUpload(h, "trip", "", bytes.NewReader(link), int64(len(link)))
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	want := `failed to receive folder "trip" from 192.168.68.53 after `
+	if len(lines) != 2 || !strings.HasPrefix(lines[1], want) {
+		t.Errorf("logs = %q, want a second line starting with %q", logs.String(), want)
 	}
 }
