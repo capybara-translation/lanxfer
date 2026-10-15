@@ -21,10 +21,11 @@ var ErrInvalidEntry = errors.New("invalid folder entry")
 
 // Limits on entry paths. Creating a deep tree is slow (thousands of levels
 // take tens of seconds) and tar allows names of a megabyte, so a hostile
-// sender could tie up the receiver; real folders stay far below these.
+// sender could tie up the receiver; real folders stay far below these. The
+// sender checks the same limits so it fails before sending anything.
 const (
-	maxEntryDepth   = 64
-	maxEntryPathLen = 4096
+	MaxEntryDepth   = 64
+	MaxEntryPathLen = 4096
 )
 
 // SaveDir extracts the tar stream in r, which must be exactly size bytes,
@@ -158,12 +159,12 @@ func entryPath(name string) (string, error) {
 	if p == "" || p == "." {
 		return "", nil
 	}
-	if len(p) > maxEntryPathLen {
-		return "", fmt.Errorf("%w: a path is longer than %d bytes", ErrInvalidEntry, maxEntryPathLen)
+	if len(p) > MaxEntryPathLen {
+		return "", fmt.Errorf("%w: a path is longer than %d bytes", ErrInvalidEntry, MaxEntryPathLen)
 	}
 	parts := strings.Split(p, "/")
-	if len(parts) > maxEntryDepth {
-		return "", fmt.Errorf("%w: %q is nested deeper than %d folders", ErrInvalidEntry, name, maxEntryDepth)
+	if len(parts) > MaxEntryDepth {
+		return "", fmt.Errorf("%w: %q is nested deeper than %d folders", ErrInvalidEntry, name, MaxEntryDepth)
 	}
 	for _, part := range parts {
 		if err := ValidateFilename(part); err != nil {
