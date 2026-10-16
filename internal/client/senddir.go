@@ -2,11 +2,17 @@ package client
 
 import (
 	"archive/tar"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -223,4 +229,70 @@ type countWriter struct{ n int64 }
 func (c *countWriter) Write(p []byte) (int, error) {
 	c.n += int64(len(p))
 	return len(p), nil
+}
+
+// ErrDirsUnsupported is returned by SendDir when the receiver runs a lanxfer
+// version without folder support.
+var ErrDirsUnsupported = errors.New("the receiver does not support folders; update lanxfer on it")
+
+// SendDir uploads the folder described by plan to the lanxfer receiver at
+// host:port as one tar stream, built while it is being sent. Cancelling ctx
+// aborts the transfer; the receiver then discards what it got. Result.Size
+// is the length of the tar stream.
+func SendDir(ctx context.Context, host string, port int, plan *DirPlan, opts SendOptions) (*Result, error) {
+	pr, pw := io.Pipe()
+	writeErr := make(chan error, 1)
+	go func() {
+		err := writeTar(pw, plan)
+		pw.CloseWithError(err)
+		writeErr <- err
+	}()
+
+	var body io.Reader = pr
+	if opts.Progress != nil {
+		body = &countingReader{r: pr, total: plan.TarSize, report: opts.Progress}
+	}
+	u := url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Path:   "/dirs/" + plan.Name, // percent-encoded when the request is written
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, u.String(), body)
+	if err != nil {
+		pr.Close()
+		<-writeErr
+		return nil, err
+	}
+	req.ContentLength = plan.TarSize
+	req.Header.Set("Content-Type", "application/x-tar")
+	if opts.From != "" {
+		req.Header.Set(server.FromHeader, opts.From)
+	}
+
+	start := time.Now()
+	resp, err := newHTTPClient().Do(req)
+	// The transport may stop reading the body early (an error, or a response
+	// sent before the upload ended). Closing the pipe unblocks the writer.
+	pr.Close()
+	werr := <-writeErr
+	if err != nil {
+		if werr != nil && !errors.Is(werr, io.ErrClosedPipe) {
+			return nil, werr // a local problem, such as a file that changed, is the real cause
+		}
+		return nil, fmt.Errorf("send to %s: %w", u.Host, err)
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusCreated:
+	case http.StatusNotFound:
+		return nil, ErrDirsUnsupported
+	default:
+		return nil, responseError(u.Host, resp)
+	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return &Result{
+		RemoteName: strings.TrimSpace(string(respBody)),
+		Size:       plan.TarSize,
+		Duration:   time.Since(start),
+	}, nil
 }
