@@ -4,15 +4,14 @@
 LAN, with no server in between.
 
 lanxfer is a small, dependency-free Go CLI. Run `lanxfer recv` on the machine
-that should receive, then `lanxfer send <name> <file>` on the machine that has
-the file. Receivers are found automatically on the local network. Short text
-can be sent the same way with `lanxfer say`.
+that should receive, then `lanxfer send <name> <file-or-folder>` on the
+machine that has it. Receivers are found automatically on the local network.
+Short text can be sent the same way with `lanxfer say`.
 
 ## Status
 
-Early but usable: single-file transfer with progress display, short text
-messages, automatic peer discovery, and sending by name. No directory transfer
-and no encryption yet.
+Early but usable: file and folder transfer with progress display, short text
+messages, automatic peer discovery, and sending by name. No encryption yet.
 
 ## Usage
 
@@ -29,7 +28,7 @@ See who is receiving on your network:
 
 Sender, by name or by IP address:
 
-    lanxfer send [--port 8425] [--name <name>] <ip-or-name> <file>
+    lanxfer send [--port 8425] [--name <name>] <ip-or-name> <file-or-folder>
 
 Defaults: port `8425`, save directory `~/lanxfer`, maximum file size 50 GiB,
 name = hostname without `.local`. Names are matched case-insensitively. If a
@@ -62,6 +61,36 @@ its IP address:
 If a file with the same name already exists on the receiver, the new one is
 saved as `movie (1).mp4`, `movie (2).mp4`, and so on. Existing files are
 never overwritten.
+
+### Sending folders
+
+Pass a folder instead of a file to send it with everything inside:
+
+    lanxfer send mac2 ~/Pictures/trip
+    sending trip/ (152 files, 1.2 GiB) -> mac2 (192.168.1.20:8425)
+    done: 1.2 GiB in 10.4s (118.0 MiB/s)
+    skipped 2 items (system files, links, and other special files):
+      .DS_Store (system file)
+      2024/._IMG_0001.jpg (system file)
+
+The receiver saves it as `trip` (or `trip (1)` and so on if the name is
+taken) only after everything has arrived; an interrupted transfer leaves
+nothing behind. The executable bit is kept, and so are modification times
+for the files and folders inside (the received top folder itself does not
+keep the sender's time; it gets the time it was received).
+
+Not sent: symbolic links, special files, and junk that operating systems
+create on their own: `.DS_Store`, `._*`, `Icon\r`, `Thumbs.db`, `desktop.ini`,
+and the folders `__MACOSX`, `.Spotlight-V100`, `.fseventsd`, `.Trashes`,
+`.TemporaryItems`, and `.DocumentRevisions-V100`. Up to 10 skipped items are
+listed with the reason, followed by a count of the rest. A folder containing
+a name the receiver would reject (for example a Windows reserved name such as
+`CON`) is refused before anything is sent, as is one with paths nested deeper
+than 64 folders or longer than 4096 bytes. The receiver rejects a folder
+holding two names that differ only in letter case if its file system ignores
+case (the default on macOS and Windows).
+A receiver running on Windows rejects names containing `< > : " | ? *`, so
+such files or folders cannot be sent to Windows.
 
 ### Sending text
 
@@ -97,10 +126,20 @@ Built-in protections:
   rejected, as are names of the form `.lanxfer-*.part`, which are reserved
   for temporary files).
 - Existing files are never overwritten; collisions are renamed.
+- Folders are checked entry by entry: every path element passes the same
+  filename checks, only regular files and folders are accepted (never
+  symbolic or hard links), and all writes go through `os.Root`, which
+  refuses to leave the temporary folder. Received files are `0600`, or
+  `0700` if they were executable; folders are `0700`. The receiver also
+  rejects sparse entries, entries larger than the stream that carries them,
+  paths deeper than 64 levels or longer than 4096 bytes, and names that
+  differ from an earlier entry only in letter case or Unicode normalization
+  (instead of merging them).
 - Files are written to a temporary `.part` file and renamed into place only
   after the full declared size has arrived, so an interrupted transfer never
   leaves a truncated file that looks complete.
-- Uploads larger than `--max-size` are rejected before any data is read.
+- Uploads larger than `--max-size` (for a folder, its whole tar stream) are
+  rejected before any data is read.
 - The save directory is created with mode `0700` and files with `0600`.
 - Received text is printed and logged with control characters (other than
   newline and tab) and bidirectional formatting characters replaced by
@@ -114,11 +153,12 @@ receiver has a firewall, allow both TCP and UDP on that port. Names are
 self-declared and unauthenticated: anyone on the LAN can announce any name,
 so treat a name as a convenience, not as proof of identity.
 
-Stopping either side with Ctrl-C during a transfer leaves nothing behind: the
-receiver deletes the partial file. If the receiver is killed forcibly or the
-machine loses power, a `.lanxfer-*.part` file can remain in the save
-directory; `lanxfer recv` deletes such files on startup once they have not
-been modified for 10 minutes.
+Stopping either side with Ctrl-C during a transfer normally leaves nothing
+behind: the receiver deletes the partial file or folder (it waits up to 5
+seconds for this while shutting down). If the receiver is killed forcibly or
+the machine loses power, a `.lanxfer-*.part` file or folder can remain in the
+save directory. `lanxfer recv` deletes such leftovers on startup once nothing
+in them has been modified for 10 minutes.
 
 ## Troubleshooting
 
@@ -170,6 +210,27 @@ or invalid one leaves just the IP address.
 Because it is plain HTTP, you can test a receiver with curl:
 
     curl -T file.bin http://192.168.1.20:8425/files/file.bin
+
+### Folders
+
+    PUT /dirs/<url-encoded-folder-name>
+    Content-Length: <size of the tar stream>
+    Content-Type: application/x-tar
+    X-Lanxfer-From: mac1
+
+    <tar stream>
+
+The body is an uncompressed tar archive of the folder's contents, with paths
+relative to the folder (`sub/a.txt`; a leading `./` is accepted). Only
+regular files and folders are allowed. Content-Length is required so that a
+transfer cut short is never mistaken for a complete one. Responses are the
+same as for files; `400` also covers a rejected entry. A tar file made with
+the `tar` command works:
+
+    tar -cf trip.tar -C trip . && curl -T trip.tar http://192.168.1.20:8425/dirs/trip
+
+On macOS, prefix the `tar` command with `COPYFILE_DISABLE=1` so it does not
+add `._*` metadata files.
 
 ### Text messages
 
@@ -245,7 +306,7 @@ Requires the Go version declared in `go.mod`. No third-party dependencies.
 3. ~~Send by peer name (`lanxfer send mac2 file.zip`)~~
 4. ~~Send short text between machines (`lanxfer say mac2 "hello"`)~~
 5. ~~Progress display and cancellation~~
-6. Directory transfer
+6. ~~Directory transfer~~
 7. Device pairing and TLS
 8. GUI with drag and drop
 

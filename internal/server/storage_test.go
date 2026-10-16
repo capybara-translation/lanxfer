@@ -59,6 +59,19 @@ func TestValidateFilename(t *testing.T) {
 	}
 }
 
+func TestValidateFilenameWindowsCharacters(t *testing.T) {
+	for _, c := range `<>:"|?*` {
+		name := "a" + string(c) + "b"
+		err := validateFilename(name, true)
+		if !errors.Is(err, ErrInvalidFilename) {
+			t.Errorf("validateFilename(%q, windows) = %v, want ErrInvalidFilename", name, err)
+		}
+		if err := validateFilename(name, false); err != nil {
+			t.Errorf("validateFilename(%q, not windows) = %v, want nil", name, err)
+		}
+	}
+}
+
 // listFiles returns the names of the entries directly under dir.
 func listFiles(t *testing.T, dir string) []string {
 	t.Helper()

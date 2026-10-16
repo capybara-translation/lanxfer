@@ -67,6 +67,17 @@ type extractor struct {
 	created map[string]bool // slash path -> is a folder
 	written int64           // file bytes accepted so far
 	limit   int64           // declared length of the whole stream
+	folders int             // folders created so far
+	maxDirs int             // most folders the stream may create
+}
+
+// folderBudget is the most folders a stream of size bytes may create. Every
+// entry takes at least one 512-byte block and lanxfer's sender sends one
+// entry per folder, so size/512 covers an honest stream. The extra
+// MaxEntryDepth allows for the parents of the last entry. Without a bound,
+// one block naming a deep chain of folders would create dozens of them.
+func folderBudget(size int64) int {
+	return int(min(size/512, 1<<30)) + MaxEntryDepth
 }
 
 // extractInto unpacks the tar stream into dir. Every file operation goes
@@ -80,7 +91,7 @@ func extractInto(dir string, r io.Reader, size int64) (int, error) {
 	// Closed before returning: Windows cannot rename a folder with an open handle.
 	defer root.Close()
 
-	ex := &extractor{root: root, created: map[string]bool{}, limit: size}
+	ex := &extractor{root: root, created: map[string]bool{}, limit: size, maxDirs: folderBudget(size)}
 	body := &countingReader{r: io.LimitReader(r, size)}
 	tr := tar.NewReader(body)
 	type dirTime struct {
@@ -194,9 +205,13 @@ func (ex *extractor) mkdirAll(rel, name string) error {
 		if _, err := ex.root.Lstat(path); err == nil {
 			return fmt.Errorf("%w: %q differs from another entry only in letter case or Unicode normalization", ErrInvalidEntry, name)
 		}
+		if ex.folders >= ex.maxDirs {
+			return fmt.Errorf("%w: %q would create more folders than the upload can describe", ErrInvalidEntry, name)
+		}
 		if err := ex.root.Mkdir(path, 0o700); err != nil {
 			return fmt.Errorf("create folder %q: %w", prefix, err)
 		}
+		ex.folders++
 		ex.created[prefix] = true
 	}
 	return nil

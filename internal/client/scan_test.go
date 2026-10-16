@@ -178,13 +178,27 @@ func TestCheckEntryPath(t *testing.T) {
 	// The OS path limit (1024 bytes on macOS) stops a real folder tree from
 	// reaching the receiver's length limit, so the check is tested directly.
 	long := strings.Repeat("n", 100) + "/"
-	ok := strings.Repeat(long, 40) + "f" // 4001 bytes, 41 elements
+	prefix := strings.Repeat(long, 40) // 4040 bytes, 40 folders
+	ok := prefix + "f"                 // 4041 bytes, 41 elements
 	if err := checkEntryPath(ok); err != nil {
 		t.Errorf("%d byte path: %v, want accepted", len(ok), err)
 	}
-	tooLong := strings.Repeat(long, 41) + "f" // 4102 bytes, 42 elements
+	tooLong := strings.Repeat(long, 41) + "f" // 4142 bytes, 42 elements
 	if err := checkEntryPath(tooLong); err == nil || !strings.Contains(err.Error(), "longer") {
 		t.Errorf("%d byte path: err = %v, want one saying longer", len(tooLong), err)
+	}
+
+	// Exact boundary: vary only the last element (at most 255 bytes).
+	exact := prefix + strings.Repeat("f", 4096-len(prefix))
+	if len(exact) != 4096 {
+		t.Fatalf("test setup: len = %d, want 4096", len(exact))
+	}
+	if err := checkEntryPath(exact); err != nil {
+		t.Errorf("%d byte path: %v, want accepted", len(exact), err)
+	}
+	over := exact + "f"
+	if err := checkEntryPath(over); err == nil || !strings.Contains(err.Error(), "longer") {
+		t.Errorf("%d byte path: err = %v, want one saying longer", len(over), err)
 	}
 }
 

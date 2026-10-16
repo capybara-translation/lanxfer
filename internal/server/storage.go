@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -34,8 +35,15 @@ var windowsReserved = map[string]struct{}{
 // ValidateFilename checks whether a filename provided by the sender is safe
 // to use as a single file name directly under the receive directory.
 // It rejects path traversal, absolute paths, control characters, and names
-// incompatible with Windows.
+// incompatible with Windows. Characters that only Windows forbids are
+// checked only when running on Windows: a Windows receiver rejects them, and
+// a Windows sender cannot have such names anyway. Other systems do not
+// restrict them because the receiver's system is unknown when sending by IP.
 func ValidateFilename(name string) error {
+	return validateFilename(name, runtime.GOOS == "windows")
+}
+
+func validateFilename(name string, windows bool) error {
 	if name == "" || name == "." || name == ".." {
 		return fmt.Errorf("%w: %q", ErrInvalidFilename, name)
 	}
@@ -49,6 +57,9 @@ func ValidateFilename(name string) error {
 		if r < 0x20 || r == 0x7F {
 			return fmt.Errorf("%w: %q contains control character", ErrInvalidFilename, name)
 		}
+	}
+	if windows && strings.ContainsAny(name, `<>:"|?*`) {
+		return fmt.Errorf("%w: %q contains a character Windows does not allow in names", ErrInvalidFilename, name)
 	}
 	// Windows silently strips trailing dots and spaces, which would make the
 	// name collide with a different file, so reject them.

@@ -385,3 +385,38 @@ func TestSaveDirRejectsCorruptHeader(t *testing.T) {
 		t.Errorf("left %v, want nothing", got)
 	}
 }
+
+func TestSaveDirBoundsFolderCount(t *testing.T) {
+	// Each 512-byte entry names a 64-level chain, so the stream is far too
+	// small to describe the folders it would create.
+	var entries []tarEntry
+	for i := range 40 {
+		entries = append(entries, tarDir(fmt.Sprintf("%05d", i)+strings.Repeat("/a", 63)+"/"))
+	}
+	st := newStorage(t)
+	_, _, err := saveDir(t, st, "trip", buildTar(t, entries...))
+	if !errors.Is(err, ErrInvalidEntry) {
+		t.Fatalf("err = %v, want ErrInvalidEntry", err)
+	}
+	if got := listFiles(t, st.Dir); len(got) != 0 {
+		t.Errorf("left %v, want nothing", got)
+	}
+
+	// One entry per folder, as lanxfer sends them, stays within the budget.
+	entries = nil
+	for i := range 50 {
+		entries = append(entries, tarDir(fmt.Sprintf("d%02d", i)+"/"))
+	}
+	if _, _, err := saveDir(t, st, "flat", buildTar(t, entries...)); err != nil {
+		t.Errorf("50 folders with one entry each: %v, want accepted", err)
+	}
+	entries = nil
+	path := ""
+	for i := range 50 {
+		path += fmt.Sprintf("n%02d/", i)
+		entries = append(entries, tarDir(path))
+	}
+	if _, _, err := saveDir(t, st, "nested", buildTar(t, entries...)); err != nil {
+		t.Errorf("50 nested folders with one entry each: %v, want accepted", err)
+	}
+}
