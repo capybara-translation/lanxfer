@@ -69,8 +69,21 @@ func TestScanDirCollectsAndExcludes(t *testing.T) {
 	if got := rels(plan); !slices.Equal(got, want) {
 		t.Errorf("entries = %q, want %q", got, want)
 	}
-	if plan.Name != "trip" || plan.Files != 4 || plan.Skipped != 8 {
-		t.Errorf("Name, Files, Skipped = %q, %d, %d; want trip, 4, 8", plan.Name, plan.Files, plan.Skipped)
+	if plan.Name != "trip" || plan.Files != 4 {
+		t.Errorf("Name, Files = %q, %d; want trip, 4", plan.Name, plan.Files)
+	}
+	wantSkipped := []SkippedItem{
+		{".DS_Store", "system file"},
+		{".Spotlight-V100", "system folder"},
+		{"Icon\r", "system file"},
+		{"Thumbs.db", "system file"},
+		{"__MACOSX", "system folder"},
+		{"desktop.ini", "system file"},
+		{"link", "symbolic link"},
+		{"sub/._b.txt", "system file"},
+	}
+	if !slices.Equal(plan.Skipped, wantSkipped) {
+		t.Errorf("Skipped = %q, want %q", plan.Skipped, wantSkipped)
 	}
 	wantSize := int64(len("aaa") + len("bb") + len("kept: not an exact match")*2)
 	if plan.ContentSize != wantSize {
@@ -85,8 +98,9 @@ func TestScanDirOnlyJunk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.entries) != 0 || plan.Files != 0 || plan.Skipped != 2 {
-		t.Errorf("entries, Files, Skipped = %q, %d, %d; want none, 0, 2", rels(plan), plan.Files, plan.Skipped)
+	wantSkipped := []SkippedItem{{".DS_Store", "system file"}, {"Thumbs.db", "system file"}}
+	if len(plan.entries) != 0 || plan.Files != 0 || !slices.Equal(plan.Skipped, wantSkipped) {
+		t.Errorf("entries, Files, Skipped = %q, %d, %q; want none, 0, %q", rels(plan), plan.Files, plan.Skipped, wantSkipped)
 	}
 }
 

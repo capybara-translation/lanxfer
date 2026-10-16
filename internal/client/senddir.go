@@ -22,13 +22,19 @@ import (
 // DirPlan is a folder scanned for sending: what goes into the tar stream
 // and how long that stream will be.
 type DirPlan struct {
-	Root        string // folder on disk (symbolic links resolved)
-	Name        string // folder name sent to the receiver
-	Files       int    // regular files to send
-	ContentSize int64  // total size of those files
-	TarSize     int64  // exact length of the tar stream
-	Skipped     int    // excluded system files and folders, links, special files
+	Root        string        // folder on disk (symbolic links resolved)
+	Name        string        // folder name sent to the receiver
+	Files       int           // regular files to send
+	ContentSize int64         // total size of those files
+	TarSize     int64         // exact length of the tar stream
+	Skipped     []SkippedItem // excluded system files and folders, links, special files, in walk order
 	entries     []dirEntry
+}
+
+// SkippedItem is something ScanDir left out of the transfer.
+type SkippedItem struct {
+	Path   string // slash-separated, relative to the folder
+	Reason string // "system file", "system folder", "symbolic link", or "special file"
 }
 
 type dirEntry struct {
@@ -100,22 +106,27 @@ func ScanDir(path string) (*DirPlan, error) {
 		if p == root {
 			return nil
 		}
-		if isJunk(d.Name(), d.IsDir()) {
-			plan.Skipped++
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !d.IsDir() && !d.Type().IsRegular() {
-			plan.Skipped++ // symbolic links, devices, pipes, sockets
-			return nil
-		}
 		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		if isJunk(d.Name(), d.IsDir()) {
+			if d.IsDir() {
+				plan.Skipped = append(plan.Skipped, SkippedItem{rel, "system folder"})
+				return filepath.SkipDir
+			}
+			plan.Skipped = append(plan.Skipped, SkippedItem{rel, "system file"})
+			return nil
+		}
+		if !d.IsDir() && !d.Type().IsRegular() {
+			reason := "special file" // devices, pipes, sockets
+			if d.Type()&fs.ModeSymlink != 0 {
+				reason = "symbolic link"
+			}
+			plan.Skipped = append(plan.Skipped, SkippedItem{rel, reason})
+			return nil
+		}
 		if err := server.ValidateFilename(d.Name()); err != nil {
 			return fmt.Errorf("cannot send %q: %w", rel, err)
 		}

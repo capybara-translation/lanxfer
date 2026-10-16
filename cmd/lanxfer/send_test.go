@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/discovery"
 )
 
@@ -92,5 +95,93 @@ func TestInterrupted(t *testing.T) {
 	cancel()
 	if got := interrupted(ctx, other); !errors.Is(got, errCancelled) {
 		t.Errorf("cancelled: got %v, want errCancelled", got)
+	}
+}
+
+func TestPrintDone(t *testing.T) {
+	tests := []struct {
+		name     string
+		res      client.Result
+		sentName string
+		size     int64
+		want     string
+	}{
+		{
+			name:     "folder shows content size, not tar size",
+			res:      client.Result{RemoteName: "trip", Size: 10240, Duration: 2 * time.Second},
+			sentName: "trip",
+			size:     2048,
+			want:     "done: 2.0 KiB in 2s (1.0 KiB/s)\n",
+		},
+		{
+			name:     "renamed by the receiver",
+			res:      client.Result{RemoteName: "trip (1)", Size: 10240, Duration: 2 * time.Second},
+			sentName: "trip",
+			size:     2048,
+			want:     "done: 2.0 KiB in 2s (1.0 KiB/s) [saved as \"trip (1)\"]\n",
+		},
+		{
+			name:     "zero duration has no rate",
+			res:      client.Result{RemoteName: "a.txt", Size: 2048},
+			sentName: "a.txt",
+			size:     2048,
+			want:     "done: 2.0 KiB in 0s\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printDone(&buf, &tt.res, tt.sentName, tt.size)
+			if got := buf.String(); got != tt.want {
+				t.Errorf("printDone = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrintSkipped(t *testing.T) {
+	many := make([]client.SkippedItem, 12)
+	var wantMany strings.Builder
+	wantMany.WriteString("skipped 12 items (system files, links, and other special files):\n")
+	for i := range many {
+		many[i] = client.SkippedItem{Path: fmt.Sprintf("d/._%02d", i), Reason: "system file"}
+		if i < 10 {
+			fmt.Fprintf(&wantMany, "  d/._%02d (system file)\n", i)
+		}
+	}
+	wantMany.WriteString("  ... and 2 more\n")
+
+	tests := []struct {
+		name  string
+		items []client.SkippedItem
+		want  string
+	}{
+		{
+			name: "two items",
+			items: []client.SkippedItem{
+				{Path: ".DS_Store", Reason: "system file"},
+				{Path: "test/.DS_Store", Reason: "system file"},
+			},
+			want: "skipped 2 items (system files, links, and other special files):\n" +
+				"  .DS_Store (system file)\n" +
+				"  test/.DS_Store (system file)\n",
+		},
+		{name: "more than shown", items: many, want: wantMany.String()},
+		{
+			name:  "control character is quoted",
+			items: []client.SkippedItem{{Path: "Icon\r", Reason: "system file"}, {Path: "写真/link", Reason: "symbolic link"}},
+			want: "skipped 2 items (system files, links, and other special files):\n" +
+				"  \"Icon\\r\" (system file)\n" +
+				"  写真/link (symbolic link)\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printSkipped(&buf, tt.items)
+			if got := buf.String(); got != tt.want {
+				t.Errorf("printSkipped =\n%s\nwant\n%s", got, tt.want)
+			}
+		})
 	}
 }
