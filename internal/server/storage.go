@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // ErrInvalidFilename is a sentinel error indicating that a received filename
@@ -35,20 +36,21 @@ var windowsReserved = map[string]struct{}{
 // ValidateFilename checks whether a filename provided by the sender is safe
 // to use as a single file name directly under the receive directory.
 // It rejects path traversal, absolute paths, control characters, and names
-// incompatible with Windows. Characters that only Windows forbids are
-// checked only when running on Windows: a Windows receiver rejects them, and
-// a Windows sender cannot have such names anyway. Other systems do not
-// restrict them because the receiver's system is unknown when sending by IP.
+// incompatible with Windows. Rules that depend on the file system are
+// applied for the system this program runs on: a receiver enforces its own
+// limits, and a sender cannot hold names its own system forbids anyway. They
+// are not applied for other systems because the receiver's system is unknown
+// when sending by IP.
 func ValidateFilename(name string) error {
-	return validateFilename(name, runtime.GOOS == "windows")
+	return validateFilename(name, runtime.GOOS)
 }
 
-func validateFilename(name string, windows bool) error {
+func validateFilename(name, goos string) error {
 	if name == "" || name == "." || name == ".." {
 		return fmt.Errorf("%w: %q", ErrInvalidFilename, name)
 	}
-	if len(name) > 255 {
-		return fmt.Errorf("%w: name too long (%d bytes)", ErrInvalidFilename, len(name))
+	if err := checkNameLength(name, goos); err != nil {
+		return err
 	}
 	if strings.ContainsAny(name, `/\`) {
 		return fmt.Errorf("%w: %q contains path separator", ErrInvalidFilename, name)
@@ -58,7 +60,7 @@ func validateFilename(name string, windows bool) error {
 			return fmt.Errorf("%w: %q contains control character", ErrInvalidFilename, name)
 		}
 	}
-	if windows && strings.ContainsAny(name, `<>:"|?*`) {
+	if goos == "windows" && strings.ContainsAny(name, `<>:"|?*`) {
 		return fmt.Errorf("%w: %q contains a character Windows does not allow in names", ErrInvalidFilename, name)
 	}
 	// Windows silently strips trailing dots and spaces, which would make the
@@ -73,6 +75,27 @@ func validateFilename(name string, windows bool) error {
 	// must never carry it.
 	if ok, _ := filepath.Match(partPattern, name); ok {
 		return fmt.Errorf("%w: %q is reserved for temporary files", ErrInvalidFilename, name)
+	}
+	return nil
+}
+
+// checkNameLength applies the file system's limit on one name: 255 UTF-16
+// units on macOS (APFS) and Windows (NTFS), so a Japanese name may have 255
+// characters there, and 255 bytes elsewhere (Linux file systems count bytes,
+// which is about 85 Japanese characters).
+func checkNameLength(name, goos string) error {
+	if goos == "darwin" || goos == "windows" {
+		units := 0
+		for _, r := range name {
+			units += utf16.RuneLen(r)
+		}
+		if units > 255 {
+			return fmt.Errorf("%w: name too long (%d characters, the limit here is 255)", ErrInvalidFilename, units)
+		}
+		return nil
+	}
+	if len(name) > 255 {
+		return fmt.Errorf("%w: name too long (%d bytes, the limit here is 255)", ErrInvalidFilename, len(name))
 	}
 	return nil
 }

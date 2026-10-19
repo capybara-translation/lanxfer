@@ -81,7 +81,11 @@ func runRecv(args []string) error {
 		}()
 	}
 
-	receiver := server.New(st, *maxSize, server.NewInbox(filepath.Join(*dir, "messages.log"), os.Stdout), logger)
+	inbox := server.NewInbox(filepath.Join(*dir, "messages.log"), os.Stdout)
+	if err := inbox.Prepare(); err != nil {
+		logger.Printf("warning: text messages cannot be saved: %v", err)
+	}
+	receiver := server.New(st, *maxSize, inbox, logger)
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *port),
 		Handler: receiver.Handler(),

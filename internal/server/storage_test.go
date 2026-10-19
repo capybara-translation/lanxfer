@@ -62,12 +62,41 @@ func TestValidateFilename(t *testing.T) {
 func TestValidateFilenameWindowsCharacters(t *testing.T) {
 	for _, c := range `<>:"|?*` {
 		name := "a" + string(c) + "b"
-		err := validateFilename(name, true)
+		err := validateFilename(name, "windows")
 		if !errors.Is(err, ErrInvalidFilename) {
 			t.Errorf("validateFilename(%q, windows) = %v, want ErrInvalidFilename", name, err)
 		}
-		if err := validateFilename(name, false); err != nil {
-			t.Errorf("validateFilename(%q, not windows) = %v, want nil", name, err)
+		if err := validateFilename(name, "linux"); err != nil {
+			t.Errorf("validateFilename(%q, linux) = %v, want nil", name, err)
+		}
+	}
+}
+
+func TestValidateFilenameLengthByOS(t *testing.T) {
+	kana := func(n int) string { return strings.Repeat("あ", n) } // 3 bytes, 1 UTF-16 unit each
+	emoji := strings.Repeat("😀", 128)                            // 512 bytes, 256 UTF-16 units
+	tests := []struct {
+		name string
+		goos string
+		ok   bool
+	}{
+		{kana(85), "linux", true},     // 255 bytes
+		{kana(86), "linux", false},    // 258 bytes: Linux counts bytes
+		{kana(86), "darwin", true},    // macOS and Windows count characters
+		{kana(255), "darwin", true},   // 765 bytes, still 255 characters
+		{kana(255), "windows", true},  //
+		{kana(256), "darwin", false},  //
+		{kana(256), "windows", false}, //
+		{emoji, "darwin", false},      // 128 emoji are 256 UTF-16 units
+		{strings.Repeat("a", 256), "darwin", false},
+	}
+	for _, tt := range tests {
+		err := validateFilename(tt.name, tt.goos)
+		if tt.ok && err != nil {
+			t.Errorf("%s, %d bytes: %v, want accepted", tt.goos, len(tt.name), err)
+		}
+		if !tt.ok && !errors.Is(err, ErrInvalidFilename) {
+			t.Errorf("%s, %d bytes: %v, want ErrInvalidFilename", tt.goos, len(tt.name), err)
 		}
 	}
 }

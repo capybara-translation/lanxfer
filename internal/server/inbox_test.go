@@ -175,3 +175,43 @@ func TestDeliverLogErrorShowsNothing(t *testing.T) {
 		t.Errorf("terminal got %q, want nothing", out.String())
 	}
 }
+
+func TestPrepareCreatesLogAndKeepsContent(t *testing.T) {
+	in, _, logPath := newTestInbox(t)
+	if err := in.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(logPath)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("log = %v, %v; want a regular file", info, err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("perm = %v, want 0600", info.Mode().Perm())
+	}
+	if err := os.WriteFile(logPath, []byte("earlier\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(logPath); string(b) != "earlier\n" {
+		t.Errorf("log = %q, want the earlier content kept", b)
+	}
+}
+
+func TestPreparedLogNameIsNotTakenByUploads(t *testing.T) {
+	st := newStorage(t)
+	in := NewInbox(filepath.Join(st.Dir, "messages.log"), &bytes.Buffer{})
+	if err := in.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if name, _, err := saveDir(t, st, "messages.log", buildTar(t)); err != nil || name != "messages.log (1)" {
+		t.Errorf("folder upload saved as %q, %v; want messages.log (1)", name, err)
+	}
+	if name, err := st.Save("messages.log", strings.NewReader("x"), 1); err != nil || name != "messages (1).log" {
+		t.Errorf("file upload saved as %q, %v; want messages (1).log", name, err)
+	}
+	if err := in.Deliver("mac1", netip.MustParseAddr("192.168.68.53"), "hello"); err != nil {
+		t.Errorf("Deliver after the uploads: %v", err)
+	}
+}

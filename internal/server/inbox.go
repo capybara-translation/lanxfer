@@ -26,6 +26,18 @@ func NewInbox(logPath string, out io.Writer) *Inbox {
 	return &Inbox{out: out, logPath: logPath, now: time.Now}
 }
 
+// Prepare creates the log file if it does not exist yet. Taking the name
+// before any upload arrives matters: a file or folder sent as "messages.log"
+// is then renamed like any other collision, instead of a folder occupying the
+// name and making every later message fail.
+func (in *Inbox) Prepare() error {
+	f, err := os.OpenFile(in.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("prepare message log: %w", err)
+	}
+	return f.Close()
+}
+
 // Deliver records one message. from is the sender's self-declared name and
 // may be empty; addr is the sender's IP address taken from the connection.
 func (in *Inbox) Deliver(from string, addr netip.Addr, text string) error {
