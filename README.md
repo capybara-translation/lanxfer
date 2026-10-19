@@ -307,8 +307,8 @@ Requires the Go version declared in `go.mod`. No third-party dependencies.
 4. ~~Send short text between machines (`lanxfer say mac2 "hello"`)~~
 5. ~~Progress display and cancellation~~
 6. ~~Directory transfer~~
-7. Device pairing and TLS
-8. GUI with drag and drop
+7. GUI with drag and drop
+8. Device pairing and TLS
 
 ## License
 
