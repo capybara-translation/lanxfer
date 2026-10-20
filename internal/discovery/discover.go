@@ -22,11 +22,19 @@ type Peer struct {
 	Name string
 	Addr netip.AddrPort // IP from the reply's source, port from its payload
 	OS   string
+	ID   string // device ID from the reply; "" for receivers that send none
 }
 
 // ErrNoNetwork is returned when no broadcast-capable private network is
 // available to search.
 var ErrNoNetwork = errors.New("no private network interface to search on")
+
+// QueryAddr sends a query by unicast to addr from a fresh socket and returns
+// the replies received within wait. It is how a stored address is checked
+// without broadcasting.
+func QueryAddr(ctx context.Context, addr netip.AddrPort, wait time.Duration) ([]Peer, error) {
+	return query(ctx, []netip.AddrPort{addr}, wait)
+}
 
 // Discover broadcasts a query on every attached private network and returns
 // the receivers that answer within wait, sorted by name.
@@ -104,7 +112,7 @@ func query(ctx context.Context, targets []netip.AddrPort, wait time.Duration) ([
 			continue // answer to the resent query, or to a second interface
 		}
 		seen[addr] = true
-		peers = append(peers, Peer{Name: p.Name, Addr: addr, OS: p.OS})
+		peers = append(peers, Peer{Name: p.Name, Addr: addr, OS: p.OS, ID: p.ID})
 	}
 	slices.SortFunc(peers, func(a, b Peer) int {
 		return cmp.Or(cmp.Compare(a.Name, b.Name), a.Addr.Compare(b.Addr))

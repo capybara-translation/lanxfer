@@ -71,7 +71,7 @@ func runRecv(args []string) error {
 
 	// Discovery is a convenience: if its port is taken (e.g. another recv
 	// is running), keep receiving files and just stay undiscoverable.
-	if resp, err := discovery.NewResponder(&net.UDPAddr{Port: *port}, name, *port); err != nil {
+	if resp, err := discovery.NewResponder(&net.UDPAddr{Port: *port}, discovery.Self{Name: name, Port: *port}, nil); err != nil {
 		logger.Printf("warning: peer discovery disabled: %v", err)
 	} else {
 		go func() {
