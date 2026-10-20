@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"runtime"
 
-	"github.com/capybara-translation/lanxfer/internal/server"
+	"github.com/capybara-translation/lanxfer/internal/netguard"
 )
 
 // Responder answers discovery queries on behalf of a running receiver.
@@ -60,7 +60,7 @@ func (r *Responder) Serve(ctx context.Context) error {
 			continue
 		}
 		src = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
-		if !server.IsAllowedRemote(src.String()) {
+		if !netguard.IsAllowedRemote(src.String()) {
 			continue
 		}
 		r.conn.WriteToUDPAddrPort(r.reply, src)

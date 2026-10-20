@@ -10,6 +10,7 @@ import (
 	"net/netip"
 
 	"github.com/capybara-translation/lanxfer/internal/humanize"
+	"github.com/capybara-translation/lanxfer/internal/netguard"
 	"github.com/capybara-translation/lanxfer/internal/peername"
 )
 
@@ -47,7 +48,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /messages", s.handleMessage)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !IsAllowedRemote(r.RemoteAddr) {
+		if !netguard.IsAllowedRemote(r.RemoteAddr) {
 			s.logger.Printf("rejected request from %s", r.RemoteAddr)
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return

@@ -1,4 +1,4 @@
-package server
+package netguard
 
 import "testing"
 
@@ -30,6 +30,29 @@ func TestIsAllowedRemote(t *testing.T) {
 	for _, tt := range tests {
 		if got := IsAllowedRemote(tt.addr); got != tt.want {
 			t.Errorf("IsAllowedRemote(%q) = %v, want %v", tt.addr, got, tt.want)
+		}
+	}
+}
+
+func TestIsLoopback(t *testing.T) {
+	tests := []struct {
+		addr string
+		want bool
+	}{
+		{"127.0.0.1:1", true},
+		{"127.0.0.2:1", true},
+		{"[::1]:1", true},
+		{"[::ffff:127.0.0.1]:1", true}, // IPv4-mapped loopback
+		{"192.168.1.2:1", false},
+		{"[fe80::1]:1", false}, // link-local is LAN, not loopback
+		{"8.8.8.8:53", false},
+		{"", false},
+		{"not-an-address", false},
+		{"127.0.0.1", false}, // missing port
+	}
+	for _, tt := range tests {
+		if got := IsLoopback(tt.addr); got != tt.want {
+			t.Errorf("IsLoopback(%q) = %v, want %v", tt.addr, got, tt.want)
 		}
 	}
 }
