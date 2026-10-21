@@ -5,29 +5,16 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
-	"github.com/capybara-translation/lanxfer/internal/discovery"
-	"github.com/capybara-translation/lanxfer/internal/history"
 	"github.com/capybara-translation/lanxfer/internal/identity"
+	"github.com/capybara-translation/lanxfer/internal/node"
 	"github.com/capybara-translation/lanxfer/internal/peername"
-	"github.com/capybara-translation/lanxfer/internal/server"
 )
-
-// shutdownWait bounds how long recv waits for interrupted transfers to
-// remove their temporary files before exiting.
-const shutdownWait = 5 * time.Second
-
-// staleAfter is how long a temporary file must sit untouched before recv
-// treats it as left over from a dead transfer.
-const staleAfter = 10 * time.Minute
 
 func runRecv(args []string) error {
 	fs := flag.NewFlagSet("recv", flag.ExitOnError)
@@ -53,93 +40,33 @@ func runRecv(args []string) error {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
 
-	st, err := server.NewStorage(*dir)
-	if err != nil {
-		return err
-	}
-
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 
-	n, err := st.RemoveStaleParts(staleAfter)
-	if n > 0 {
-		logger.Printf("removed %d stale partial transfer(s)", n)
-	}
+	// A missing config folder is not fatal: node warns and runs without
+	// device ID, history and saved peers. It cannot know why the location
+	// is missing, so the cause is logged here.
+	configDir, err := identity.ConfigDir()
 	if err != nil {
-		logger.Printf("warning: could not remove stale partial transfers: %v", err)
+		logger.Printf("warning: cannot locate the config folder: %v", err)
+		configDir = ""
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop() // restore default handling: a second Ctrl-C kills the process at once
+	}()
 
-	// Discovery is a convenience: if its port is taken (e.g. another recv
-	// is running), keep receiving files and just stay undiscoverable.
-	if resp, err := discovery.NewResponder(&net.UDPAddr{Port: *port}, discovery.Self{Name: name, Port: *port}, nil); err != nil {
-		logger.Printf("warning: peer discovery disabled: %v", err)
-	} else {
-		go func() {
-			if err := resp.Serve(ctx); err != nil {
-				logger.Printf("warning: peer discovery stopped: %v", err)
-			}
-		}()
-	}
-
-	// rec must stay a true nil interface when the history is unavailable:
-	// wrapping a nil *history.Store would look enabled and fail on use.
-	var rec server.Recorder
-	store, err := openHistory()
-	if err != nil {
-		logger.Printf("warning: history disabled: %v", err)
-	} else {
-		rec = store
-	}
-	inbox := server.NewInbox(rec, os.Stdout)
-	var opts []server.Option
-	if rec != nil {
-		opts = append(opts, server.WithHistory(rec))
-	}
-	receiver := server.New(st, *maxSize, inbox, logger, opts...)
-	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: receiver.Handler(),
-		// Defend against clients that open a connection and never send
-		// headers (slowloris). Body transfer is not affected.
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	logger.Printf("lanxfer recv: listening on %s as %q, saving to %s", srv.Addr, name, *dir)
-
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.ListenAndServe() }()
-	select {
-	case err := <-serveErr:
-		return err // could not listen, e.g. the port is in use
-	case <-ctx.Done():
-	}
-	stop() // restore default handling: a second Ctrl-C kills the process at once
-
-	logger.Printf("shutting down")
-	// Close, not Shutdown: Shutdown would let transfers run to the end, but
-	// the user asked to stop now. Closing the connections makes each upload
-	// in progress fail and delete its temporary file.
-	srv.Close()
-	waitCtx, cancel := context.WithTimeout(context.Background(), shutdownWait)
-	defer cancel()
-	if err := receiver.WaitUploads(waitCtx); err != nil {
-		logger.Printf("warning: exiting before interrupted transfers finished cleaning up; a later recv removes what is left")
-	}
-	return nil
-}
-
-// openHistory opens history.jsonl in the lanxfer config folder, creating the
-// folder if needed.
-func openHistory() (*history.Store, error) {
-	dir, err := identity.ConfigDir()
-	if err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("create config folder: %w", err)
-	}
-	return history.Open(filepath.Join(dir, "history.jsonl")), nil
+	return node.Run(ctx, node.Config{
+		SaveDir:   *dir,
+		ConfigDir: configDir,
+		Port:      *port,
+		MaxSize:   *maxSize,
+		Name:      name,
+		Logger:    logger,
+		Out:       os.Stdout,
+	})
 }
 
 // peerName picks the name announced to other machines: the --name flag if

@@ -37,7 +37,8 @@ const (
 // server.MaxMessageSize.
 const MaxText = 1 << 20
 
-const version = 1
+// Version is the history file format version stored in every entry's V field.
+const Version = 1
 
 // Entry is one line of the history file.
 type Entry struct {
@@ -60,7 +61,7 @@ type Entry struct {
 
 // Validate reports whether the entry can be written to the history file.
 func (e Entry) Validate() error {
-	if e.V != version {
+	if e.V != Version {
 		return fmt.Errorf("history: unsupported version %d", e.V)
 	}
 	switch e.Dir {
@@ -103,7 +104,7 @@ func Open(path string) *Store {
 // the current time if it is zero. The file is created with mode 0600 if
 // missing.
 func (s *Store) Append(e Entry) error {
-	e.V = version
+	e.V = Version
 	if e.Time.IsZero() {
 		e.Time = time.Now()
 	}
@@ -166,7 +167,7 @@ func ReadAll(path string) ([]Entry, error) {
 		line, err := r.ReadBytes('\n')
 		if len(line) > 0 {
 			var e Entry
-			if json.Unmarshal(line, &e) == nil && e.V == version {
+			if json.Unmarshal(line, &e) == nil && e.V == Version {
 				entries = append(entries, e)
 			}
 		}
