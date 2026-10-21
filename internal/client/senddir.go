@@ -276,9 +276,7 @@ func SendDir(ctx context.Context, host string, port int, plan *DirPlan, opts Sen
 	}
 	req.ContentLength = plan.TarSize
 	req.Header.Set("Content-Type", "application/x-tar")
-	if opts.From != "" {
-		req.Header.Set(server.FromHeader, opts.From)
-	}
+	setSenderHeaders(req, opts)
 
 	start := time.Now()
 	resp, err := newHTTPClient().Do(req)
@@ -305,5 +303,6 @@ func SendDir(ctx context.Context, host string, port int, plan *DirPlan, opts Sen
 		RemoteName: strings.TrimSpace(string(respBody)),
 		Size:       plan.TarSize,
 		Duration:   time.Since(start),
+		PeerID:     peerID(resp),
 	}, nil
 }

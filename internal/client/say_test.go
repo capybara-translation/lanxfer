@@ -51,7 +51,7 @@ func startMessageReceiver(t *testing.T) (string, int, *syncBuffer) {
 
 func TestSayRoundtrip(t *testing.T) {
 	host, port, out := startMessageReceiver(t)
-	if err := client.Say(host, port, "mac1", "hello\nworld"); err != nil {
+	if _, err := client.Say(host, port, "hello\nworld", client.SendOptions{From: "mac1"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); !strings.Contains(got, " from mac1 (127.0.0.1) ---\nhello\nworld\n") {
@@ -59,9 +59,21 @@ func TestSayRoundtrip(t *testing.T) {
 	}
 }
 
+func TestSayReturnsResult(t *testing.T) {
+	host, port, _ := startMessageReceiver(t)
+	res, err := client.Say(host, port, "hi", client.SendOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This receiver has no device ID, so there is no peer ID to report.
+	if res == nil || *res != (client.Result{}) {
+		t.Errorf("result = %+v, want a zero Result", res)
+	}
+}
+
 func TestSayWithoutName(t *testing.T) {
 	host, port, out := startMessageReceiver(t)
-	if err := client.Say(host, port, "", "hi"); err != nil {
+	if _, err := client.Say(host, port, "hi", client.SendOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); !strings.Contains(got, " from 127.0.0.1 ---\n") {
@@ -71,7 +83,7 @@ func TestSayWithoutName(t *testing.T) {
 
 func TestSayTooLargeReportsServerHint(t *testing.T) {
 	host, port, _ := startMessageReceiver(t)
-	err := client.Say(host, port, "mac1", strings.Repeat("a", server.MaxMessageSize+1))
+	_, err := client.Say(host, port, strings.Repeat("a", server.MaxMessageSize+1), client.SendOptions{From: "mac1"})
 	if err == nil || !strings.Contains(err.Error(), "lanxfer send") {
 		t.Errorf("err = %v, want the server's hint to use lanxfer send", err)
 	}
@@ -84,7 +96,7 @@ func TestSayConnectionRefused(t *testing.T) {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	if err := client.Say("127.0.0.1", port, "mac1", "hi"); err == nil {
+	if _, err := client.Say("127.0.0.1", port, "hi", client.SendOptions{From: "mac1"}); err == nil {
 		t.Fatal("want error when nothing is listening")
 	}
 }

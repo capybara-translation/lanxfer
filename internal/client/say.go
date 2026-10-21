@@ -7,13 +7,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-
-	"github.com/capybara-translation/lanxfer/internal/server"
 )
 
-// Say posts a text message to the lanxfer receiver at host:port. from is
-// the sender's peer name and is left out of the request when empty.
-func Say(host string, port int, from, text string) error {
+// Say posts a text message to the lanxfer receiver at host:port. opts.From
+// and opts.FromID identify the sender and are left out of the request when
+// empty; opts.Progress is ignored. The returned Result carries only PeerID.
+func Say(host string, port int, text string, opts SendOptions) (*Result, error) {
 	u := url.URL{
 		Scheme: "http",
 		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
@@ -21,20 +20,18 @@ func Say(host string, port int, from, text string) error {
 	}
 	req, err := http.NewRequest(http.MethodPost, u.String(), strings.NewReader(text))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	if from != "" {
-		req.Header.Set(server.FromHeader, from)
-	}
+	setSenderHeaders(req, opts)
 
 	resp, err := newHTTPClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("send to %s: %w", u.Host, err)
+		return nil, fmt.Errorf("send to %s: %w", u.Host, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		return responseError(u.Host, resp)
+		return nil, responseError(u.Host, resp)
 	}
-	return nil
+	return &Result{PeerID: peerID(resp)}, nil
 }

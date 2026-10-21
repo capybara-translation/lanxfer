@@ -42,7 +42,7 @@ func runSay(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := client.Say(addr.Addr().String(), int(addr.Port()), from, text); err != nil {
+	if _, err := client.Say(addr.Addr().String(), int(addr.Port()), text, client.SendOptions{From: from}); err != nil {
 		return err
 	}
 	dest := addr.Addr().String()

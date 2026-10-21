@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/capybara-translation/lanxfer/internal/server"
 )
 
 // Result describes a completed transfer.
@@ -22,12 +20,16 @@ type Result struct {
 	RemoteName string        // name the receiver actually saved (renamed on collision)
 	Size       int64         // bytes sent
 	Duration   time.Duration // wall-clock transfer time
+	PeerID     string        // receiver's device ID from its response; "" if absent or malformed
 }
 
 // SendOptions holds the optional parts of a transfer.
 type SendOptions struct {
 	// From is the sender's peer name. It is left out of the request when empty.
 	From string
+	// FromID is the sender's device ID. It is left out of the request when
+	// empty; callers must pass a valid ID (see identity.Valid) or "".
+	FromID string
 	// Progress, if set, is called with the number of bytes read from the
 	// file so far and the file size. It is called from the HTTP client's
 	// goroutine, not the caller's, and possibly even shortly after Send
@@ -73,9 +75,7 @@ func Send(ctx context.Context, host string, port int, path string, opts SendOpti
 	// ContentLength is not inferred for a file body, so set it explicitly.
 	req.ContentLength = info.Size()
 	req.Header.Set("Content-Type", "application/octet-stream")
-	if opts.From != "" {
-		req.Header.Set(server.FromHeader, opts.From)
-	}
+	setSenderHeaders(req, opts)
 
 	start := time.Now()
 	resp, err := newHTTPClient().Do(req)
@@ -92,6 +92,7 @@ func Send(ctx context.Context, host string, port int, path string, opts SendOpti
 		RemoteName: strings.TrimSpace(string(respBody)),
 		Size:       info.Size(),
 		Duration:   time.Since(start),
+		PeerID:     peerID(resp),
 	}, nil
 }
 
