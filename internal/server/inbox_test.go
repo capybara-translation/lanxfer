@@ -2,15 +2,16 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/netip"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/capybara-translation/lanxfer/internal/history"
 )
 
 func TestSanitize(t *testing.T) {
@@ -50,19 +51,19 @@ func TestFormatMessage(t *testing.T) {
 	}
 }
 
-func newTestInbox(t *testing.T) (*Inbox, *bytes.Buffer, string) {
+func newTestInbox(t *testing.T) (*Inbox, *bytes.Buffer, *memRecorder) {
 	t.Helper()
-	logPath := filepath.Join(t.TempDir(), "messages.log")
+	rec := &memRecorder{}
 	var out bytes.Buffer
-	in := NewInbox(logPath, &out)
+	in := NewInbox(rec, &out)
 	in.now = func() time.Time { return fixedTime }
-	return in, &out, logPath
+	return in, &out, rec
 }
 
-func TestDeliverWritesTerminalAndLog(t *testing.T) {
-	in, out, logPath := newTestInbox(t)
+func TestDeliverRecordsAndPrints(t *testing.T) {
+	in, out, rec := newTestInbox(t)
 	for _, text := range []string{"first", "second"} {
-		if err := in.Deliver("mac1", sender, text); err != nil {
+		if err := in.Deliver("mac1", testID, sender, text); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -70,21 +71,31 @@ func TestDeliverWritesTerminalAndLog(t *testing.T) {
 	if out.String() != want {
 		t.Errorf("terminal output = %q, want %q", out.String(), want)
 	}
-	data, err := os.ReadFile(logPath)
-	if err != nil {
+	got := rec.list()
+	if len(got) != 2 {
+		t.Fatalf("recorded %d entries, want 2", len(got))
+	}
+	wantEntry := history.Entry{
+		Time: fixedTime, Dir: history.In, Kind: history.KindText, Text: "first",
+		PeerID: testID, PeerName: "mac1", PeerAddr: "192.168.68.53", Status: history.StatusOK,
+	}
+	if got[0] != wantEntry {
+		t.Errorf("entry = %+v, want %+v", got[0], wantEntry)
+	}
+	if got[1].Text != "second" {
+		t.Errorf("second entry text = %q", got[1].Text)
+	}
+}
+
+func TestDeliverWithoutRecorderOnlyPrints(t *testing.T) {
+	var out bytes.Buffer
+	in := NewInbox(nil, &out)
+	in.now = func() time.Time { return fixedTime }
+	if err := in.Deliver("mac1", "", sender, "hi"); err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != want {
-		t.Errorf("log = %q, want %q", data, want)
-	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(logPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if perm := info.Mode().Perm(); perm != 0o600 {
-			t.Errorf("log mode = %o, want 600", perm)
-		}
+	if want := formatMessage(fixedTime, "mac1", sender, "hi"); out.String() != want {
+		t.Errorf("terminal output = %q, want %q", out.String(), want)
 	}
 }
 
@@ -114,9 +125,9 @@ func (w *trickleWriter) String() string {
 }
 
 func TestDeliverConcurrentKeepsMessagesWholeAndInOrder(t *testing.T) {
-	logPath := filepath.Join(t.TempDir(), "messages.log")
+	rec := &memRecorder{}
 	var out trickleWriter
-	in := NewInbox(logPath, &out)
+	in := NewInbox(rec, &out)
 	in.now = func() time.Time { return fixedTime }
 
 	const n = 50
@@ -128,7 +139,7 @@ func TestDeliverConcurrentKeepsMessagesWholeAndInOrder(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := in.Deliver("mac1", sender, text); err != nil {
+			if err := in.Deliver("mac1", "", sender, text); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -155,63 +166,23 @@ func TestDeliverConcurrentKeepsMessagesWholeAndInOrder(t *testing.T) {
 		t.Fatalf("%d messages missing from the terminal", len(want))
 	}
 
-	// The log must hold the same messages in the same order.
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
+	// The history must hold the same messages in the same order.
+	var recorded strings.Builder
+	for _, e := range rec.list() {
+		recorded.WriteString(formatMessage(fixedTime, "mac1", sender, e.Text))
 	}
-	if string(data) != terminal {
-		t.Error("log differs from the terminal output (content or order)")
+	if recorded.String() != terminal {
+		t.Error("history differs from the terminal output (content or order)")
 	}
 }
 
-func TestDeliverLogErrorShowsNothing(t *testing.T) {
-	var out bytes.Buffer
-	in := NewInbox(filepath.Join(t.TempDir(), "missing-dir", "messages.log"), &out)
-	if err := in.Deliver("mac1", sender, "hello"); err == nil {
-		t.Fatal("want error when the log cannot be opened")
+func TestDeliverRecordErrorShowsNothing(t *testing.T) {
+	in, out, rec := newTestInbox(t)
+	rec.err = errors.New("disk full")
+	if err := in.Deliver("mac1", "", sender, "hello"); err == nil {
+		t.Fatal("want error when the history cannot be written")
 	}
 	if out.Len() != 0 {
 		t.Errorf("terminal got %q, want nothing", out.String())
-	}
-}
-
-func TestPrepareCreatesLogAndKeepsContent(t *testing.T) {
-	in, _, logPath := newTestInbox(t)
-	if err := in.Prepare(); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(logPath)
-	if err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("log = %v, %v; want a regular file", info, err)
-	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-		t.Errorf("perm = %v, want 0600", info.Mode().Perm())
-	}
-	if err := os.WriteFile(logPath, []byte("earlier\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := in.Prepare(); err != nil {
-		t.Fatal(err)
-	}
-	if b, _ := os.ReadFile(logPath); string(b) != "earlier\n" {
-		t.Errorf("log = %q, want the earlier content kept", b)
-	}
-}
-
-func TestPreparedLogNameIsNotTakenByUploads(t *testing.T) {
-	st := newStorage(t)
-	in := NewInbox(filepath.Join(st.Dir, "messages.log"), &bytes.Buffer{})
-	if err := in.Prepare(); err != nil {
-		t.Fatal(err)
-	}
-	if name, _, err := saveDir(t, st, "messages.log", buildTar(t)); err != nil || name != "messages.log (1)" {
-		t.Errorf("folder upload saved as %q, %v; want messages.log (1)", name, err)
-	}
-	if name, err := st.Save("messages.log", strings.NewReader("x"), 1); err != nil || name != "messages (1).log" {
-		t.Errorf("file upload saved as %q, %v; want messages (1).log", name, err)
-	}
-	if err := in.Deliver("mac1", netip.MustParseAddr("192.168.68.53"), "hello"); err != nil {
-		t.Errorf("Deliver after the uploads: %v", err)
 	}
 }

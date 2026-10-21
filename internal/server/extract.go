@@ -32,14 +32,14 @@ const (
 // into a temporary folder and, only if every entry is valid and the stream
 // is complete, moves it to a non-colliding final name. On failure the
 // temporary folder is removed and nothing is left behind. It returns the
-// final name and the number of files written.
-func (s *Storage) SaveDir(name string, r io.Reader, size int64) (string, int, error) {
+// final name, the number of files written, and their total size in bytes.
+func (s *Storage) SaveDir(name string, r io.Reader, size int64) (string, int, int64, error) {
 	if err := ValidateFilename(name); err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	tmpPath, err := os.MkdirTemp(s.Dir, partPattern)
 	if err != nil {
-		return "", 0, fmt.Errorf("create temp folder: %w", err)
+		return "", 0, 0, fmt.Errorf("create temp folder: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -48,16 +48,16 @@ func (s *Storage) SaveDir(name string, r io.Reader, size int64) (string, int, er
 		}
 	}()
 
-	files, err := extractInto(tmpPath, r, size)
+	files, content, err := extractInto(tmpPath, r, size)
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	finalName, err := s.commit(tmpPath, name, true)
 	if err != nil {
-		return "", 0, err
+		return "", 0, 0, err
 	}
 	committed = true
-	return finalName, files, nil
+	return finalName, files, content, nil
 }
 
 // extractor unpacks one tar stream into root and remembers every path it
@@ -82,11 +82,12 @@ func folderBudget(size int64) int {
 
 // extractInto unpacks the tar stream into dir. Every file operation goes
 // through an os.Root, so even an entry that slipped past the checks cannot
-// reach outside dir.
-func extractInto(dir string, r io.Reader, size int64) (int, error) {
+// reach outside dir. It returns the number of files written and their total
+// size in bytes.
+func extractInto(dir string, r io.Reader, size int64) (int, int64, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	// Closed before returning: Windows cannot rename a folder with an open handle.
 	defer root.Close()
@@ -106,21 +107,21 @@ func extractInto(dir string, r io.Reader, size int64) (int, error) {
 			break
 		}
 		if errors.Is(err, tar.ErrHeader) || errors.Is(err, tar.ErrFieldTooLong) {
-			return 0, fmt.Errorf("%w: read folder stream: %w", ErrInvalidEntry, err)
+			return 0, 0, fmt.Errorf("%w: read folder stream: %w", ErrInvalidEntry, err)
 		}
 		if err != nil {
-			return 0, fmt.Errorf("read folder stream: %w", err)
+			return 0, 0, fmt.Errorf("read folder stream: %w", err)
 		}
 		// A sparse entry reports a huge size while carrying almost no data,
 		// which would fill the disk far beyond the declared stream length.
 		for key := range hdr.PAXRecords {
 			if strings.HasPrefix(key, "GNU.sparse.") {
-				return 0, fmt.Errorf("%w: %q is a sparse file", ErrInvalidEntry, hdr.Name)
+				return 0, 0, fmt.Errorf("%w: %q is a sparse file", ErrInvalidEntry, hdr.Name)
 			}
 		}
 		rel, err := entryPath(hdr.Name)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if rel == "" {
 			continue // the folder itself
@@ -128,25 +129,25 @@ func extractInto(dir string, r io.Reader, size int64) (int, error) {
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := ex.mkdirAll(rel, hdr.Name); err != nil {
-				return 0, err
+				return 0, 0, err
 			}
 			dirs = append(dirs, dirTime{filepath.FromSlash(rel), hdr.ModTime})
 		case tar.TypeReg:
 			if err := ex.writeEntry(rel, tr, hdr); err != nil {
-				return 0, err
+				return 0, 0, err
 			}
 			files++
 		default:
-			return 0, fmt.Errorf("%w: %q is not a regular file or folder", ErrInvalidEntry, hdr.Name)
+			return 0, 0, fmt.Errorf("%w: %q is not a regular file or folder", ErrInvalidEntry, hdr.Name)
 		}
 	}
 	// tar commands pad archives to a record size; read the rest so a body
 	// that ends early is noticed.
 	if _, err := io.Copy(io.Discard, body); err != nil {
-		return 0, fmt.Errorf("read folder stream: %w", err)
+		return 0, 0, fmt.Errorf("read folder stream: %w", err)
 	}
 	if body.n != size {
-		return 0, fmt.Errorf("incomplete transfer: got %d of %d bytes", body.n, size)
+		return 0, 0, fmt.Errorf("incomplete transfer: got %d of %d bytes", body.n, size)
 	}
 
 	// Creating entries inside a folder updates its modification time, so
@@ -156,10 +157,10 @@ func extractInto(dir string, r io.Reader, size int64) (int, error) {
 	})
 	for _, d := range dirs {
 		if err := root.Chtimes(d.path, d.mtime, d.mtime); err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
-	return files, nil
+	return files, ex.written, nil
 }
 
 // entryPath turns a tar entry name into a safe slash-separated path relative

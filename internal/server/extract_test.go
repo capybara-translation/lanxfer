@@ -61,7 +61,8 @@ func buildTar(t *testing.T, entries ...tarEntry) []byte {
 
 func saveDir(t *testing.T, st *Storage, name string, data []byte) (string, int, error) {
 	t.Helper()
-	return st.SaveDir(name, bytes.NewReader(data), int64(len(data)))
+	name, files, _, err := st.SaveDir(name, bytes.NewReader(data), int64(len(data)))
+	return name, files, err
 }
 
 func newStorage(t *testing.T) *Storage {
@@ -204,7 +205,7 @@ func TestSaveDirIncompleteLeavesNothing(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			st := newStorage(t)
-			if _, _, err := st.SaveDir("trip", bytes.NewReader(tt.body), tt.size); err == nil {
+			if _, _, _, err := st.SaveDir("trip", bytes.NewReader(tt.body), tt.size); err == nil {
 				t.Fatal("want an error")
 			}
 			if got := listFiles(t, st.Dir); len(got) != 0 {

@@ -9,7 +9,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/capybara-translation/lanxfer/internal/humanize"
-	"github.com/capybara-translation/lanxfer/internal/peername"
 )
 
 // MaxMessageSize is the largest text message a receiver accepts, in bytes.
@@ -41,20 +40,18 @@ func (s *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 
 	// The name is self-declared, so an unusable one is dropped rather than
 	// rejected; the IP address is always shown alongside it.
-	from := r.Header.Get(FromHeader)
-	if peername.Validate(from) != nil {
-		from = ""
-	}
+	snd := senderOf(r)
 	remote, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	if err := s.inbox.Deliver(from, remote.Addr().Unmap(), string(data)); err != nil {
+	if err := s.inbox.Deliver(snd.name, snd.id, remote.Addr().Unmap(), string(data)); err != nil {
 		s.logger.Printf("message from %s: %v", r.RemoteAddr, err)
 		http.Error(w, "could not store message", http.StatusInternalServerError)
 		return
 	}
+	s.observeSender(snd)
 	w.WriteHeader(http.StatusNoContent)
 }

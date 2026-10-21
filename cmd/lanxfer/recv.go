@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/capybara-translation/lanxfer/internal/discovery"
+	"github.com/capybara-translation/lanxfer/internal/history"
+	"github.com/capybara-translation/lanxfer/internal/identity"
 	"github.com/capybara-translation/lanxfer/internal/peername"
 	"github.com/capybara-translation/lanxfer/internal/server"
 )
@@ -81,11 +83,21 @@ func runRecv(args []string) error {
 		}()
 	}
 
-	inbox := server.NewInbox(filepath.Join(*dir, "messages.log"), os.Stdout)
-	if err := inbox.Prepare(); err != nil {
-		logger.Printf("warning: text messages cannot be saved: %v", err)
+	// rec must stay a true nil interface when the history is unavailable:
+	// wrapping a nil *history.Store would look enabled and fail on use.
+	var rec server.Recorder
+	store, err := openHistory()
+	if err != nil {
+		logger.Printf("warning: history disabled: %v", err)
+	} else {
+		rec = store
 	}
-	receiver := server.New(st, *maxSize, inbox, logger)
+	inbox := server.NewInbox(rec, os.Stdout)
+	var opts []server.Option
+	if rec != nil {
+		opts = append(opts, server.WithHistory(rec))
+	}
+	receiver := server.New(st, *maxSize, inbox, logger, opts...)
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", *port),
 		Handler: receiver.Handler(),
@@ -115,6 +127,19 @@ func runRecv(args []string) error {
 		logger.Printf("warning: exiting before interrupted transfers finished cleaning up; a later recv removes what is left")
 	}
 	return nil
+}
+
+// openHistory opens history.jsonl in the lanxfer config folder, creating the
+// folder if needed.
+func openHistory() (*history.Store, error) {
+	dir, err := identity.ConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create config folder: %w", err)
+	}
+	return history.Open(filepath.Join(dir, "history.jsonl")), nil
 }
 
 // peerName picks the name announced to other machines: the --name flag if

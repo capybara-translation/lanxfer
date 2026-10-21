@@ -4,67 +4,55 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/capybara-translation/lanxfer/internal/history"
 )
 
-// Inbox delivers received text messages: it appends each one to a log file
+// Inbox delivers received text messages: it records each one in the history
 // and prints it on the terminal.
 type Inbox struct {
-	mu      sync.Mutex
-	out     io.Writer
-	logPath string
-	now     func() time.Time
+	mu  sync.Mutex
+	rec Recorder
+	out io.Writer
+	now func() time.Time
 }
 
-// NewInbox returns an Inbox that appends to the file at logPath (created
-// with mode 0600 if missing) and prints to out.
-func NewInbox(logPath string, out io.Writer) *Inbox {
-	return &Inbox{out: out, logPath: logPath, now: time.Now}
+// NewInbox returns an Inbox that records to rec and prints to out. A nil rec
+// skips recording and only prints.
+func NewInbox(rec Recorder, out io.Writer) *Inbox {
+	return &Inbox{rec: rec, out: out, now: time.Now}
 }
 
-// Prepare creates the log file if it does not exist yet. Taking the name
-// before any upload arrives matters: a file or folder sent as "messages.log"
-// is then renamed like any other collision, instead of a folder occupying the
-// name and making every later message fail.
-func (in *Inbox) Prepare() error {
-	f, err := os.OpenFile(in.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("prepare message log: %w", err)
-	}
-	return f.Close()
-}
-
-// Deliver records one message. from is the sender's self-declared name and
-// may be empty; addr is the sender's IP address taken from the connection.
-func (in *Inbox) Deliver(from string, addr netip.Addr, text string) error {
-	block := formatMessage(in.now(), from, addr, text)
+// Deliver records one message and prints it. from is the sender's
+// self-declared name and fromID its device ID; both may be empty. addr is the
+// sender's IP address taken from the connection.
+func (in *Inbox) Deliver(from, fromID string, addr netip.Addr, text string) error {
+	now := in.now()
+	block := formatMessage(now, from, addr, text)
 
 	in.mu.Lock()
 	defer in.mu.Unlock()
 
-	// Write the log first so a message is never shown without being saved;
-	// on failure the sender gets an error and nothing is printed.
-	f, err := os.OpenFile(in.logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("open message log: %w", err)
-	}
-	if _, err := io.WriteString(f, block); err != nil {
-		f.Close()
-		return fmt.Errorf("write message log: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close message log: %w", err)
+	// Record first so a message is never shown without being saved; on
+	// failure the sender gets an error and nothing is printed.
+	if in.rec != nil {
+		err := in.rec.Append(history.Entry{
+			Time: now, Dir: history.In, Kind: history.KindText, Text: text,
+			PeerID: fromID, PeerName: from, PeerAddr: addr.String(), Status: history.StatusOK,
+		})
+		if err != nil {
+			return fmt.Errorf("record message: %w", err)
+		}
 	}
 	io.WriteString(in.out, block)
 	return nil
 }
 
-// formatMessage renders one message as the block printed on the terminal
-// and appended to the log.
+// formatMessage renders one message as the block printed on the terminal.
 func formatMessage(t time.Time, from string, addr netip.Addr, text string) string {
 	who := addr.String()
 	if from != "" {

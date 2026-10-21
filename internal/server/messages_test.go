@@ -6,27 +6,25 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 // newMessageHandler returns a server handler with an Inbox writing to the
-// returned buffer and log path. Tests call ServeHTTP directly, so the
+// returned buffer and recorder. Tests call ServeHTTP directly, so the
 // handler runs on the test goroutine.
-func newMessageHandler(t *testing.T) (http.Handler, *bytes.Buffer, string) {
+func newMessageHandler(t *testing.T) (http.Handler, *bytes.Buffer, *memRecorder) {
 	t.Helper()
 	st, err := NewStorage(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	logPath := filepath.Join(st.Dir, "messages.log")
+	rec := &memRecorder{}
 	var out bytes.Buffer
-	inbox := NewInbox(logPath, &out)
+	inbox := NewInbox(rec, &out)
 	inbox.now = func() time.Time { return fixedTime }
-	return New(st, 1<<20, inbox, log.New(io.Discard, "", 0)).Handler(), &out, logPath
+	return New(st, 1<<20, inbox, log.New(io.Discard, "", 0)).Handler(), &out, rec
 }
 
 func postMessage(h http.Handler, from, body, remote string) *httptest.ResponseRecorder {
@@ -41,7 +39,7 @@ func postMessage(h http.Handler, from, body, remote string) *httptest.ResponseRe
 }
 
 func TestMessageDelivered(t *testing.T) {
-	h, out, logPath := newMessageHandler(t)
+	h, out, mem := newMessageHandler(t)
 	rec := postMessage(h, "mac1", "hello", "192.168.68.53:5555")
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", rec.Code)
@@ -50,12 +48,8 @@ func TestMessageDelivered(t *testing.T) {
 	if out.String() != want {
 		t.Errorf("terminal = %q, want %q", out.String(), want)
 	}
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != want {
-		t.Errorf("log = %q, want %q", data, want)
+	if got := mem.list(); len(got) != 1 || got[0].Text != "hello" {
+		t.Errorf("recorded = %+v, want one entry with text hello", got)
 	}
 }
 
