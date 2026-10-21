@@ -121,6 +121,9 @@ Built-in protections:
 - Connections are accepted only from private (RFC 1918 / ULA), link-local,
   and loopback addresses. This is a safety net in case the port is ever
   exposed to the internet, not a substitute for a firewall.
+- Requests that carry a browser `Origin` header are rejected, so a web page
+  cannot push messages or files into a receiver. lanxfer's own clients never
+  send one.
 - Filenames are validated; the receiver never writes outside its save
   directory (path traversal, absolute paths, and control characters are
   rejected, as are names of the form `.lanxfer-*.part`, which are reserved

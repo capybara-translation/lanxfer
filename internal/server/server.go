@@ -89,8 +89,13 @@ func (s *Server) WaitUploads(ctx context.Context) error {
 }
 
 // Handler returns the routed http.Handler. Every request passes through the
-// remote-address guard before reaching the router. The device ID header is
-// set before the guard, so even a rejection tells the caller who answered.
+// remote-address guard and the Origin guard before reaching the router. The
+// device ID header is set before the guards, so even a rejection tells the
+// caller who answered.
+//
+// Browsers send an Origin header on cross-origin POST and PUT requests;
+// lanxfer's own clients never do. Rejecting any request that has one stops a
+// web page from pushing messages or files into a receiver.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /files/{name}", s.handlePut)
@@ -110,6 +115,11 @@ func (s *Server) Handler() http.Handler {
 		}
 		if !netguard.IsAllowedRemote(r.RemoteAddr) {
 			s.logger.Printf("rejected request from %s", r.RemoteAddr)
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		if _, ok := r.Header["Origin"]; ok { // present, even if empty
+			s.logger.Printf("rejected browser request from %s (Origin %q)", r.RemoteAddr, r.Header.Get("Origin"))
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

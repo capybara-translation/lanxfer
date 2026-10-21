@@ -25,14 +25,14 @@ const maxLocalHistoryBody = 6*history.MaxText + 64<<10
 // global remote-address guard, which admits the whole LAN.
 //
 // The source address alone is not enough: a web page open in a browser on
-// this machine reaches 127.0.0.1 too. Such a page could plant history
-// entries with a cross-site POST, or read the peer list after rebinding its
-// DNS name to 127.0.0.1. Browsers mark cross-site requests with an Origin
-// header, which the CLI never sends, and a rebound page still sends its own
-// host name in Host. So requests with an Origin, or with a Host that is not
-// a loopback address or "localhost", are refused.
+// this machine reaches 127.0.0.1 too. The global guard already refuses
+// requests that carry an Origin header (cross-site POSTs). What it cannot
+// see is a page that rebinds its DNS name to 127.0.0.1 and then reads the
+// peer list as same-origin, without an Origin header. That page still sends
+// its own host name in Host, so a Host that is not a loopback address or
+// "localhost" is refused here.
 func requireLoopback(w http.ResponseWriter, r *http.Request) bool {
-	if netguard.IsLoopback(r.RemoteAddr) && r.Header.Get("Origin") == "" && loopbackHost(r.Host) {
+	if netguard.IsLoopback(r.RemoteAddr) && loopbackHost(r.Host) {
 		return true
 	}
 	http.Error(w, "forbidden", http.StatusForbidden)

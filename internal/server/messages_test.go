@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -106,5 +107,63 @@ func TestMessagesDisabledWithoutInbox(t *testing.T) {
 	h := New(st, 1<<20, nil, log.New(io.Discard, "", 0)).Handler()
 	if rec := postMessage(h, "", "hi", "192.168.68.53:5555"); rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
+// A web page open in the user's browser can make the browser send a request
+// to any private address. Such requests carry an Origin header; lanxfer's own
+// clients never send one.
+func TestRejectsBrowserOrigin(t *testing.T) {
+	const remote = "192.168.1.2:5555"
+	tests := []struct {
+		name         string
+		method, path string
+		origin       string
+	}{
+		{"message from a web page", http.MethodPost, "/messages", "https://evil.example"},
+		{"message from a sandboxed page", http.MethodPost, "/messages", "null"},
+		{"file upload from a web page", http.MethodPut, "/files/x", "https://evil.example"},
+	}
+	for _, tt := range tests {
+		r := newRig(t, WithDeviceID(deviceID))
+		w := r.do(tt.method, tt.path, "hello", reqOpts{remote: remote, origin: tt.origin})
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s: status = %d, want 403", tt.name, w.Code)
+		}
+		if got := w.Header().Get(IDHeader); got != deviceID {
+			t.Errorf("%s: %s = %q, want %q", tt.name, IDHeader, got, deviceID)
+		}
+		if r.out.Len() != 0 {
+			t.Errorf("%s: message was shown: %q", tt.name, r.out.String())
+		}
+		if got := r.rec.list(); len(got) != 0 {
+			t.Errorf("%s: recorded %+v, want nothing", tt.name, got)
+		}
+		if entries, err := os.ReadDir(r.storage.Dir); err != nil || len(entries) != 0 {
+			t.Errorf("%s: storage = %v (err %v), want empty", tt.name, entries, err)
+		}
+		if !strings.Contains(r.logs.String(), "rejected browser request") {
+			t.Errorf("%s: log = %q, want a rejection line", tt.name, r.logs.String())
+		}
+	}
+
+	// An Origin header with an empty value still marks a browser request.
+	r := newRig(t)
+	req := httptest.NewRequest(http.MethodPost, "/messages", strings.NewReader("hello"))
+	req.RemoteAddr = remote
+	req.Header["Origin"] = []string{""}
+	w := httptest.NewRecorder()
+	r.h.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("empty Origin: status = %d, want 403", w.Code)
+	}
+
+	// The same message without Origin is delivered.
+	r = newRig(t)
+	if w := r.do(http.MethodPost, "/messages", "hello", reqOpts{remote: remote}); w.Code != http.StatusNoContent {
+		t.Errorf("without Origin: status = %d, want 204", w.Code)
+	}
+	if r.out.Len() == 0 {
+		t.Error("without Origin: message was not shown")
 	}
 }
