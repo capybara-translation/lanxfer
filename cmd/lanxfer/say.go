@@ -26,7 +26,7 @@ func runSay(args []string) error {
 	if len(rest) < 1 {
 		return fmt.Errorf("%w: say expects <ip-or-name> [text...]", errUsage)
 	}
-	target := rest[0]
+	targetArg := rest[0]
 
 	text, err := messageText(rest[1:], os.Stdin, isTerminal(os.Stdin))
 	if err != nil {
@@ -38,16 +38,19 @@ func runSay(args []string) error {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
 
-	addr, byName, err := resolveTarget(context.Background(), target, *port)
+	tg, err := resolveTarget(context.Background(), targetArg, *port)
 	if err != nil {
 		return err
 	}
-	if _, err := client.Say(addr.Addr().String(), int(addr.Port()), text, client.SendOptions{From: from}); err != nil {
+	opts := client.SendOptions{From: from, FromID: deviceID(os.Stderr)}
+	res, err := client.Say(tg.Addr.Addr().String(), int(tg.Addr.Port()), text, opts)
+	recordSent(*port, textEntry(tg, text, res, err), os.Stderr)
+	if err != nil {
 		return err
 	}
-	dest := addr.Addr().String()
-	if byName {
-		dest = fmt.Sprintf("%s (%s)", target, addr)
+	dest := tg.Addr.Addr().String()
+	if tg.ByName {
+		dest = fmt.Sprintf("%s (%s)", targetArg, tg.Addr)
 	}
 	fmt.Printf("sent to %s\n", dest)
 	return nil

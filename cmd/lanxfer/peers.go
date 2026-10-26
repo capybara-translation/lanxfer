@@ -6,11 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"text/tabwriter"
 	"time"
 
 	"github.com/capybara-translation/lanxfer/internal/discovery"
+	"github.com/capybara-translation/lanxfer/internal/presence"
 )
 
 func runPeers(args []string) error {
@@ -24,22 +26,65 @@ func runPeers(args []string) error {
 		return fmt.Errorf("%w: peers takes no arguments", errUsage)
 	}
 
-	peers, err := discovery.Discover(context.Background(), *port, *wait)
+	rows, err := collectPeers(context.Background(), *port, *wait)
 	if err != nil {
 		return err
 	}
-	if len(peers) == 0 {
+	if len(rows) == 0 {
 		return errors.New("no peers found. Is 'lanxfer recv' running on the other machine, and on the same network?")
 	}
-	printPeers(os.Stdout, peers)
+	printPeers(os.Stdout, rows)
 	return nil
 }
 
-func printPeers(w io.Writer, peers []discovery.Peer) {
+// peerRow is one line of the peers table.
+type peerRow struct {
+	Name     string
+	Addr     netip.AddrPort
+	OS       string
+	Online   bool
+	LastSeen time.Time // shown only for offline peers
+}
+
+// collectPeers returns the peer list of the receiver on this machine, which
+// also has the peers that are offline. Without a usable one it broadcasts a
+// query instead, which finds online peers only.
+func collectPeers(ctx context.Context, port int, wait time.Duration) ([]peerRow, error) {
+	if list, err := localPeersFunc(port); err == nil && len(list) > 0 {
+		return rowsFromPresence(list), nil
+	}
+	found, err := discoverFunc(ctx, port, wait)
+	if err != nil {
+		return nil, err
+	}
+	return rowsFromDiscovery(found), nil
+}
+
+func rowsFromPresence(list []presence.Peer) []peerRow {
+	rows := make([]peerRow, len(list))
+	for i, p := range list {
+		rows[i] = peerRow{Name: p.Name, Addr: p.Addr, OS: p.OS, Online: p.Online, LastSeen: p.LastSeen}
+	}
+	return rows
+}
+
+func rowsFromDiscovery(found []discovery.Peer) []peerRow {
+	rows := make([]peerRow, len(found))
+	for i, p := range found {
+		rows[i] = peerRow{Name: p.Name, Addr: p.Addr, OS: p.OS, Online: true}
+	}
+	return rows
+}
+
+func printPeers(w io.Writer, rows []peerRow) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tADDRESS\tOS")
-	for _, p := range peers {
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", p.Name, p.Addr, p.OS)
+	fmt.Fprintln(tw, "NAME\tADDRESS\tOS\tSTATUS\tLAST SEEN")
+	for _, r := range rows {
+		status, lastSeen := "online", "-"
+		if !r.Online {
+			status, lastSeen = "offline", formatLastSeen(r.LastSeen)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Addr, r.OS, status, lastSeen)
 	}
 	tw.Flush()
 }
