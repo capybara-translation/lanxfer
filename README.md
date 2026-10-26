@@ -11,7 +11,8 @@ Short text can be sent the same way with `lanxfer say`.
 ## Status
 
 Early but usable: file and folder transfer with progress display, short text
-messages, automatic peer discovery, and sending by name. No encryption yet.
+messages, automatic peer discovery with a remembered peer list, sending by
+name, and a history of what was sent and received. No encryption yet.
 
 ## Usage
 
@@ -22,9 +23,12 @@ Receiver (waits in the foreground; stop with Ctrl-C):
 See who is receiving on your network:
 
     lanxfer peers [--port 8425] [--wait 1s]
-    NAME    ADDRESS            OS
-    mac2    192.168.1.20:8425  darwin
-    ubuntu  192.168.1.30:8425  linux
+    NAME    ADDRESS            OS      STATUS   LAST SEEN
+    mac2    192.168.1.20:8425  darwin  online   -
+    ubuntu  192.168.1.30:8425  linux   offline  2026-10-19 21:40
+
+`LAST SEEN` (local time) is shown only for offline peers. See
+[Peers and history](#peers-and-history).
 
 Sender, by name or by IP address:
 
@@ -102,14 +106,63 @@ To send short text, use `say` instead of `send`:
     pbpaste | lanxfer say mac2
 
 Without text arguments, `say` reads stdin. Text is limited to 1 MiB; send
-anything larger as a file. The receiver prints each message and appends it to
-`messages.log` in its save directory:
+anything larger as a file. The receiver prints each message and records it in
+the [history](#peers-and-history):
 
     --- 2026-09-30 10:12:03 from mac1 (192.168.1.10) ---
     hello
 
 The sender's name defaults to its hostname (`--name` overrides it) and is
 always shown next to its IP address.
+
+### Peers and history
+
+While `lanxfer recv` runs, it keeps a list of the receivers it has seen and
+saves it, so the list survives a restart (everyone is offline until heard
+from again). `lanxfer peers` shows that list when a `recv` runs on the same
+machine, including peers that are offline. Without one it broadcasts a query
+and shows only the receivers that answer, all as online.
+
+A newly started receiver is learned by the others within about a minute. One
+that has stopped is shown as offline after about two minutes. A peer's name
+is its hostname unless it runs `lanxfer recv --name <name>`, so use `--name`
+for a friendly name such as `mac2`.
+
+When you send by name, the local `recv`'s list is used first:
+
+- An online peer is used as listed.
+- An offline peer is queried directly at its last address, and used only if
+  the same device answers there. Otherwise the send fails with
+  `<name> is offline (last seen ...)`.
+- If several online peers have the name, the send fails and lists their
+  addresses; send to one of them by IP address.
+- A name that is not in the list, or no `recv` on this machine, falls back
+  to a broadcast search.
+
+So once a receiver has been seen, sending by name keeps working even while
+broadcasts do not get through.
+
+Sends and receipts are recorded in `history.jsonl`, one JSON object per line.
+`send` and `say` record every attempt, whether it succeeded, failed, or was
+cancelled. `recv` records the texts, files, and folders it received. A CLI
+command hands its entry to the `recv` on the same machine, and appends it to
+the file itself when there is none. If a send cannot be recorded, the command
+only prints a warning. If a received text cannot be recorded, the receiver
+refuses it with `500` and does not print it; a file or folder that is already
+saved only produces a warning.
+
+The history, the peer list (`peers.json`), and the device ID (`device-id`)
+live in the config folder `lanxfer` inside the user config directory:
+
+| OS | Config folder |
+|---|---|
+| macOS | `~/Library/Application Support/lanxfer` |
+| Windows | `%AppData%\lanxfer` |
+| Linux | `~/.config/lanxfer` (or `$XDG_CONFIG_HOME/lanxfer`) |
+
+The folder is created with mode `0700` and the files with `0600`. Earlier
+versions appended texts to `messages.log` in the save directory. That file is
+no longer written; an existing one is left alone.
 
 ## Security notes
 
@@ -144,17 +197,24 @@ Built-in protections:
 - Uploads larger than `--max-size` (for a folder, its whole tar stream) are
   rejected before any data is read.
 - The save directory is created with mode `0700` and files with `0600`.
-- Received text is printed and logged with control characters (other than
-  newline and tab) and bidirectional formatting characters replaced by
-  visible escapes such as `\x1b`, so a sender cannot move the cursor,
-  recolor, hide, or reorder what appears on the receiver's terminal.
-- Discovery replies reveal only the receiver's name, port, and OS, and are
-  sent only to private, link-local, or loopback addresses.
+- Received text is printed with control characters (other than newline and
+  tab) and bidirectional formatting characters replaced by visible escapes
+  such as `\x1b`, so a sender cannot move the cursor, recolor, hide, or
+  reorder what appears on the receiver's terminal. The history keeps the
+  text as received, so a program that displays it must do the same.
+- The local API (see Protocol) answers only requests from a loopback address
+  with a loopback `Host` header, so other machines and DNS-rebinding web
+  pages cannot use it. Any program on the same machine can.
+- Discovery packets reveal only the receiver's name, port, OS, and device
+  ID, and are sent only to private, link-local, or loopback addresses.
 
 Discovery uses UDP broadcast on the same port number (8425/udp). If the
 receiver has a firewall, allow both TCP and UDP on that port. Names are
 self-declared and unauthenticated: anyone on the LAN can announce any name,
-so treat a name as a convenience, not as proof of identity.
+so treat a name as a convenience, not as proof of identity. The device ID
+(a random 128-bit value created on first use) is self-declared in the same
+way and proves nothing yet; pairing (see the roadmap) is meant to bind keys
+to it.
 
 Stopping either side with Ctrl-C during a transfer normally leaves nothing
 behind: the receiver deletes the partial file or folder (it waits up to 5
@@ -165,11 +225,15 @@ in them has been modified for 10 minutes.
 
 ## Troubleshooting
 
-If a machine does not show up in `lanxfer peers`, try sending to its IP
-address instead of its name. Discovery relies on broadcast, which Wi-Fi
-delivers less reliably than the direct connections used for sending. Some
-machines, Macs in particular, can miss broadcasts for minutes at a time while
-still receiving files and messages sent to their IP address.
+If a machine does not show up in `lanxfer peers`, wait a minute: a receiver
+is picked up at the next broadcast. Discovery relies on broadcast, which
+Wi-Fi delivers less reliably than the direct connections used for sending.
+Some machines, Macs in particular, can miss broadcasts for minutes at a time
+while still receiving files and messages sent to their IP address.
+
+A receiver that your own `lanxfer recv` has seen once can still be reached by
+name when broadcasts do not get through. For one it has never seen, send to
+its IP address instead of its name.
 
 If sending to the IP address fails too, something is blocking the connection.
 Check on that machine:
@@ -207,8 +271,14 @@ Responses: `201` (body contains the saved filename), `400` invalid filename,
 `403` disallowed source address, `411` missing Content-Length, `413` too
 large, `500` storage error.
 
-`X-Lanxfer-From` is optional and only used in the receiver's log; a missing
-or invalid one leaves just the IP address.
+`X-Lanxfer-From` is optional and only used in the receiver's log and
+history; a missing or invalid one leaves just the IP address.
+
+`X-Lanxfer-From-Id` is also optional: the sender's device ID (32 lowercase
+hex characters), which the receiver records in the history. A missing or
+malformed one is ignored. Every response from a receiver, including an
+error, carries `X-Lanxfer-Id` with the receiver's own device ID, unless it
+has none. Older versions neither send nor read either header.
 
 Because it is plain HTTP, you can test a receiver with curl:
 
@@ -244,8 +314,9 @@ add `._*` metadata files.
     <UTF-8 text, at most 1 MiB>
 
 Responses: `204` delivered, `400` empty or not UTF-8, `403` disallowed source
-address, `413` too large, `500` could not be stored. A missing or invalid
-`X-Lanxfer-From` is ignored and only the IP address is shown.
+address, `413` too large, `500` could not be stored or recorded in the
+history. A missing or invalid `X-Lanxfer-From` is ignored and only the IP
+address is shown.
 
     curl --data-binary 'hello' -H 'X-Lanxfer-From: curl' http://192.168.1.20:8425/messages
 
@@ -258,12 +329,47 @@ One JSON object per UDP datagram on port 8425. A querier broadcasts
 to the directed broadcast address of each attached private network, and every
 running receiver answers the sender directly with
 
-    {"lanxfer":1,"type":"reply","name":"mac2","port":8425,"os":"darwin"}
+    {"lanxfer":1,"type":"reply","name":"mac2","port":8425,"os":"darwin","id":"0123456789abcdef0123456789abcdef"}
 
-The receiver's IP is taken from the reply's source address. Datagrams that
-are not valid lanxfer packets are ignored. You can query by hand:
+The receiver's IP is taken from the reply's source address. `id` is the
+device ID and is optional (older versions send none). Datagrams that are not
+valid lanxfer packets are ignored. You can query by hand:
 
     echo '{"lanxfer":1,"type":"query"}' | nc -u -w1 192.168.1.20 8425
+
+Receivers also keep a list of each other. At startup and every 60 seconds a
+receiver broadcasts an `announce`, which has the fields of a `reply`, and a
+query that describes itself by adding `name`, `port`, `os`, and `id`. A
+receiver that gets either one remembers the sender; the query is answered with
+a `reply` as usual. Every 30 seconds a receiver also sends the describing
+query directly to each peer it remembers. A peer that has not been heard from
+for 90 seconds is marked offline (checked every 30 seconds, so after 90 to 120
+seconds). Older versions ignore the added fields and drop `announce`, so the
+protocol version stays `1`.
+
+### Local API
+
+The receiver also serves two endpoints for programs on the same machine; the
+CLI and a GUI use them. They answer only requests from a loopback address
+with a `Host` of `localhost`, `127.0.0.1`, or `[::1]`, and reply `403` to
+anything else. Requests with an `Origin` header are rejected as everywhere.
+
+    GET /local/peers
+
+Returns the peer list as a JSON array sorted by name; `id` and `os` are left
+out when unknown:
+
+    [{"id":"0123456789abcdef0123456789abcdef","name":"mac2","os":"darwin","addr":"192.168.1.20:8425","last_seen":"2026-10-20T21:40:12+09:00","online":true}]
+
+    POST /local/history
+    Content-Type: application/json
+
+    <one history entry>
+
+Appends an entry in the format of a line of `history.jsonl`, so that the
+receiver stays the only process writing the file. Responses: `204` recorded,
+`400` invalid entry, `413` too large, `415` wrong content type, `500` could
+not be recorded.
 
 ## Install
 
