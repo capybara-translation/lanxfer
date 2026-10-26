@@ -351,6 +351,7 @@ func TestLocalHistory(t *testing.T) {
 		{"broken JSON", `{"v":1,`, localRemote, http.StatusBadRequest, 0},
 		{"trailing data", valid + `{}`, localRemote, http.StatusBadRequest, 0},
 		{"fails validation", `{"v":1,"dir":"sideways","kind":"text","status":"ok"}`, localRemote, http.StatusBadRequest, 0},
+		{"received entry is refused", `{"v":1,"dir":"in","kind":"text","text":"forged","status":"ok"}`, localRemote, http.StatusBadRequest, 0},
 		{"wrong version", `{"v":2,"dir":"out","kind":"text","status":"ok"}`, localRemote, http.StatusBadRequest, 0},
 		{"not loopback", valid, "192.168.1.2:4000", http.StatusForbidden, 0},
 		{"too large", `{"v":1,"dir":"out","kind":"text","status":"ok","error":"` + strings.Repeat("a", maxLocalHistoryBody) + `"}`, localRemote, http.StatusRequestEntityTooLarge, 0},

@@ -33,6 +33,13 @@ func runRecv(args []string) error {
 		}
 		*dir = filepath.Join(home, "lanxfer")
 	}
+	// History records the full path of each receipt, so it must not depend
+	// on the directory recv was started from.
+	absDir, err := filepath.Abs(*dir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve save directory: %w", err)
+	}
+	*dir = absDir
 
 	hostname, _ := os.Hostname()
 	name, err := peerName(*nameFlag, hostname)

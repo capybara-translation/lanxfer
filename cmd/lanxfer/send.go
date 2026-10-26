@@ -223,7 +223,7 @@ func resolveListed(ctx context.Context, p presence.Peer) (target, error) {
 				same = r.ID == p.ID
 			}
 			if same {
-				tg.Addr = r.Addr
+				tg.Addr, tg.Name = r.Addr, r.Name
 				return tg, nil
 			}
 		}

@@ -73,7 +73,9 @@ func keyOf(p *Peer) string {
 //
 // A sighting with port 0 comes from an HTTP request, whose source port is not
 // the peer's listening port. It only refreshes a peer already known by ID and
-// never adds one.
+// never adds one. It updates the IP part of the address, LastSeen and Online,
+// and nothing else: the name in an HTTP request is whatever the sender chose,
+// not the one the peer announced.
 func (r *Registry) Observe(s Sighting, now time.Time) (changed bool) {
 	if !s.Addr.IsValid() || peername.Validate(s.Name) != nil {
 		return false
@@ -95,8 +97,8 @@ func (r *Registry) Observe(s Sighting, now time.Time) (changed bool) {
 			return false
 		}
 		addr := netip.AddrPortFrom(s.Addr.Addr(), p.Addr.Port())
-		changed = p.Name != s.Name || p.Addr != addr || !p.Online
-		p.Name, p.Addr, p.LastSeen, p.Online = s.Name, addr, now, true
+		changed = p.Addr != addr || !p.Online
+		p.Addr, p.LastSeen, p.Online = addr, now, true
 		return changed
 	}
 

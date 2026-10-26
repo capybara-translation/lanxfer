@@ -143,12 +143,14 @@ func TestResolveTargetVerifiesOfflinePeer(t *testing.T) {
 		replies  []discovery.Peer
 		queryErr error
 		wantAddr string // "" means an offline error is expected
+		wantName string // the target's name when verified
 	}{
 		{
 			name:     "same ID, uses the reply's address",
 			peer:     offline(idMac2),
 			replies:  []discovery.Peer{{Name: "mac2-renamed", ID: idMac2, Addr: netip.MustParseAddrPort("192.168.68.54:9001")}},
 			wantAddr: "192.168.68.54:9001",
+			wantName: "mac2-renamed",
 		},
 		{
 			name:    "different ID at the same address",
@@ -167,6 +169,7 @@ func TestResolveTargetVerifiesOfflinePeer(t *testing.T) {
 			peer:     offline(""),
 			replies:  []discovery.Peer{{Name: "MAC2", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
 			wantAddr: "192.168.68.54:8425",
+			wantName: "MAC2",
 		},
 		{
 			name:    "legacy peer with another name",
@@ -197,7 +200,7 @@ func TestResolveTargetVerifiesOfflinePeer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Addr.String() != tt.wantAddr || !got.ByName || got.ID != tt.peer.ID || got.Name != "mac2" {
+			if got.Addr.String() != tt.wantAddr || !got.ByName || got.ID != tt.peer.ID || got.Name != tt.wantName {
 				t.Errorf("got %+v, want addr %s", got, tt.wantAddr)
 			}
 		})

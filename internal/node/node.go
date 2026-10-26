@@ -57,13 +57,14 @@ type Config struct {
 	Name      string      // name announced to other machines
 	Logger    *log.Logger // nil discards log output
 	Out       io.Writer   // where received texts are printed; nil discards
-	// OnEvent, if not nil, receives the node's events. It may be called
-	// concurrently from several goroutines (HTTP handlers for entries, a
-	// background goroutine for peers), and some calls are made while the
-	// node holds internal locks. It must return quickly: hand the event to a
-	// channel or another goroutine instead of doing slow work. It is never
-	// called after Run returns, so it is safe to close a channel it sends to
-	// once Run has returned.
+	// OnEvent, if not nil, receives the node's events. An initial Peers
+	// event with the saved list (possibly empty) is sent once at startup.
+	// It may be called concurrently from several goroutines (HTTP handlers
+	// for entries, a background goroutine for peers), and some calls are
+	// made while the node holds internal locks. It must return quickly: hand
+	// the event to a channel or another goroutine instead of doing slow
+	// work. It is never called after Run returns, so it is safe to close a
+	// channel it sends to once Run has returned.
 	OnEvent func(Event)
 	// AnnounceEvery and ProbeEvery default to 60 s and 30 s when zero.
 	AnnounceEvery, ProbeEvery time.Duration
@@ -83,6 +84,13 @@ func Run(ctx context.Context, cfg Config) error {
 	if out == nil {
 		out = io.Discard
 	}
+	// Receipts are recorded with their full path; make it independent of
+	// the working directory.
+	absDir, err := filepath.Abs(cfg.SaveDir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve save directory: %w", err)
+	}
+	cfg.SaveDir = absDir
 	if cfg.AnnounceEvery <= 0 {
 		cfg.AnnounceEvery = defaultAnnounceEvery
 	}
@@ -194,6 +202,9 @@ func Run(ctx context.Context, cfg Config) error {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		// The saved list is the GUI's initial state; send it before
+		// any change can follow.
+		events.emit(Event{Peers: reg.Peers()})
 		saveOnChange(runCtx, reg, dirty, events, logger)
 	}()
 	go func() {

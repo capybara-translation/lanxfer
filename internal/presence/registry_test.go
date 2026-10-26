@@ -158,6 +158,28 @@ func TestRegistryHTTPSightingOnlyRefreshes(t *testing.T) {
 	if p.OS != "darwin" || !p.LastSeen.Equal(t1) || !p.Online {
 		t.Errorf("unexpected peer: %+v", p)
 	}
+
+	// The name in an HTTP request is the sender's choice and must not
+	// replace the announced one.
+	t2 := t1.Add(time.Minute)
+	if r.Observe(Sighting{ID: idA, Name: "hostname-of-mac1", Addr: ap("192.168.1.55:0")}, t2) {
+		t.Error("a different name alone must not report a change")
+	}
+	var renamed Peer
+	for _, q := range r.Peers() {
+		if q.ID == idA {
+			renamed = q
+		}
+	}
+	if renamed.Name != "mac1" || !renamed.LastSeen.Equal(t2) {
+		t.Errorf("peer = %+v, want Name mac1 kept and LastSeen refreshed", renamed)
+	}
+	if got, err := Choose(r.Peers(), "mac1"); err != nil || got.ID != idA {
+		t.Errorf("Choose(mac1) = %+v, %v; want the announced name to still match", got, err)
+	}
+	if _, err := Choose(r.Peers(), "hostname-of-mac1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Choose(hostname-of-mac1) err = %v, want ErrNotFound", err)
+	}
 }
 
 func TestRegistryTickMarksOffline(t *testing.T) {

@@ -107,6 +107,12 @@ func (s *Server) handleLocalHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Received entries are written only by the receiver itself; accepting
+	// them here would let any local process forge a message.
+	if e.Dir != history.Out {
+		http.Error(w, "only sent entries can be reported", http.StatusBadRequest)
+		return
+	}
 	if err := s.history.Append(e); err != nil {
 		s.logger.Printf("local history: %v", err)
 		http.Error(w, "could not record entry", http.StatusInternalServerError)

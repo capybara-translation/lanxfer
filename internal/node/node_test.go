@@ -369,6 +369,54 @@ func TestRunReportsLocalHistory(t *testing.T) {
 	}
 }
 
+func TestRunSendsSavedPeersFirst(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "config")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved := `[{"id":"` + testID + `","name":"saved1","addr":"192.0.2.7:8425","last_seen":"2026-10-20T09:00:00Z","online":true}]`
+	if err := os.WriteFile(filepath.Join(configDir, "peers.json"), []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := startNode(t, func(c *Config) {
+		c.ConfigDir = configDir
+		c.AnnounceEvery, c.ProbeEvery = time.Hour, time.Hour // nothing else may disturb the list
+	})
+	e := h.waitEvent(func(e Event) bool { return e.Peers != nil })
+	if len(e.Peers) != 1 || e.Peers[0].Name != "saved1" || e.Peers[0].ID != testID || e.Peers[0].Online {
+		t.Errorf("first peers event = %+v, want the saved peer, offline", e.Peers)
+	}
+}
+
+func TestRunSendsEmptyPeersEventAtStartup(t *testing.T) {
+	h := startNode(t, func(c *Config) { c.AnnounceEvery, c.ProbeEvery = time.Hour, time.Hour })
+	select {
+	case e := <-h.events:
+		if e.Entry != nil || e.Peers == nil || len(e.Peers) != 0 {
+			t.Errorf("first event = %+v, want an empty, non-nil peers list", e)
+		}
+	case <-time.After(waitTimeout):
+		t.Fatal("no initial event")
+	}
+}
+
+func TestRunRecordsAbsoluteReceiptPath(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	h := startNode(t, func(c *Config) { c.SaveDir = "inbox" })
+	src := writeTemp(t, "hello.txt", "hi")
+	if _, err := client.Send(context.Background(), "127.0.0.1", h.cfg.Port, src, client.SendOptions{From: "sender"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	e := h.waitEvent(func(e Event) bool { return e.Entry != nil })
+	if !filepath.IsAbs(e.Entry.Path) {
+		t.Fatalf("Path = %q, want an absolute path", e.Entry.Path)
+	}
+	if _, err := os.Stat(e.Entry.Path); err != nil {
+		t.Errorf("recorded path does not exist: %v", err)
+	}
+}
+
 func TestRunStopsOnCancel(t *testing.T) {
 	h := startNode(t, nil)
 	p := newFakePeer(t, "peer1", testID)

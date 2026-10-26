@@ -366,8 +366,9 @@ out when unknown:
 
     <one history entry>
 
-Appends an entry in the format of a line of `history.jsonl`, so that the
-receiver stays the only process writing the file. Responses: `204` recorded,
+Appends a sent item reported by a CLI process, in the format of a line of
+`history.jsonl`, so that the receiver stays the only process writing the file.
+Only `"dir":"out"` entries are accepted. Responses: `204` recorded,
 `400` invalid entry, `413` too large, `415` wrong content type, `500` could
 not be recorded.
 

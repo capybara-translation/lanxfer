@@ -188,6 +188,19 @@ func TestLocalRecord(t *testing.T) {
 	}
 }
 
+func TestLocalRecordWaitsLongerThanPeersCall(t *testing.T) {
+	// A timeout would make the CLI append on its own and risk a duplicate,
+	// so a receiver that is merely slow must still be waited for.
+	port := startHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1500 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	e := history.Entry{Time: time.Unix(1, 0).UTC(), Dir: history.Out, Kind: history.KindText, Text: "hi", Status: history.StatusOK}
+	if err := client.LocalRecord(port, e); err != nil {
+		t.Errorf("err = %v, want the slow reply to be accepted", err)
+	}
+}
+
 func TestLocalRecordSendsJSON(t *testing.T) {
 	var ct, origin, body string
 	port := startHandler(t, func(w http.ResponseWriter, r *http.Request) {

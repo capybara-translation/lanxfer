@@ -22,9 +22,13 @@ import (
 var ErrNoLocalReceiver = errors.New("no local lanxfer receiver")
 
 const (
-	// localTimeout bounds a whole local call. The receiver is on this
-	// machine, so a longer wait means it is not really there.
+	// localTimeout bounds a whole read-only local call. The receiver is on
+	// this machine, so a longer wait means it is not really there.
 	localTimeout = 1 * time.Second
+	// localRecordTimeout is longer: when a record call times out the CLI
+	// appends to the file itself, and the receiver may still append the same
+	// entry. A slower exit is better than a duplicate.
+	localRecordTimeout = 5 * time.Second
 	// maxLocalPeersBody caps the peer list read from the receiver.
 	maxLocalPeersBody = 8 << 20
 )
@@ -32,9 +36,9 @@ const (
 // newLocalClient returns a client for the local API. It never uses a proxy,
 // so HTTP_PROXY cannot redirect the request, and it keeps no idle connection
 // around after the call.
-func newLocalClient() *http.Client {
+func newLocalClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: localTimeout,
+		Timeout: timeout,
 		Transport: &http.Transport{
 			Proxy:             nil,
 			DisableKeepAlives: true,
@@ -56,7 +60,7 @@ func noLocalReceiver(cause any) error {
 // for the peers it knows. Any failure to get a proper list is reported as
 // ErrNoLocalReceiver, so the caller can fall back to a broadcast search.
 func LocalPeers(port int) ([]presence.Peer, error) {
-	resp, err := newLocalClient().Get(localURL(port, "/local/peers"))
+	resp, err := newLocalClient(localTimeout).Get(localURL(port, "/local/peers"))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrNoLocalReceiver, err)
 	}
@@ -94,7 +98,7 @@ func LocalRecord(port int, e history.Entry) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := newLocalClient().Do(req)
+	resp, err := newLocalClient(localRecordTimeout).Do(req)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrNoLocalReceiver, err)
 	}
