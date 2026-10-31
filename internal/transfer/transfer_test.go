@@ -604,6 +604,41 @@ func TestSendTextFailureReturnsAndRecords(t *testing.T) {
 	}
 }
 
+func TestSendTextTimesOut(t *testing.T) {
+	// A receiver that accepts the request and never answers.
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(func() { close(release); ts.Close() })
+	addr, err := netip.ParseAddrPort(ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := presence.Peer{ID: idMac2, Name: "mac2", Addr: addr, Online: true}
+
+	h := newHarness()
+	cfg := h.config()
+	cfg.TextTimeout = 200 * time.Millisecond
+	m := New(cfg)
+	t.Cleanup(m.Close)
+
+	start := time.Now()
+	err = m.SendText(peerKey, p, "hello")
+	if err == nil {
+		t.Fatal("SendText succeeded against a receiver that never answers")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("SendText took %s", d)
+	}
+	if !strings.Contains(err.Error(), "no answer within") {
+		t.Errorf("err = %v", err)
+	}
+	// A timeout is a failure, not a cancellation.
+	e := h.recorded()
+	if len(e) != 1 || e[0].Status != history.StatusFailed || e[0].Error != err.Error() {
+		t.Errorf("entries = %+v", e)
+	}
+}
+
 func TestLocateFailureRecordsFailed(t *testing.T) {
 	src := t.TempDir()
 	a, b := filepath.Join(src, "a.txt"), filepath.Join(src, "b")

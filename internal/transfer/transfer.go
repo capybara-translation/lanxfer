@@ -73,7 +73,14 @@ type Config struct {
 	// the item's transfer, and it must not call Close, which waits for the
 	// goroutine that is running the callback.
 	OnUpdate func(peerKey string, u Update)
+	// TextTimeout bounds one text send, the lookup included. Zero means
+	// DefaultTextTimeout. File sends have no limit: they can be long.
+	TextTimeout time.Duration
 }
+
+// DefaultTextTimeout is how long a text send may take before it fails. A
+// message is small, so a receiver that does not answer by then is stuck.
+const DefaultTextTimeout = 30 * time.Second
 
 // Manager runs sends. It is safe for concurrent use.
 type Manager struct {
@@ -137,13 +144,25 @@ func (m *Manager) SendText(peerKey string, p presence.Peer, text string) error {
 	m.mu.Unlock()
 	defer m.wg.Done()
 
-	tg, err := m.cfg.Locate(m.ctx, p, m.cfg.Port)
+	limit := m.cfg.TextTimeout
+	if limit <= 0 {
+		limit = DefaultTextTimeout
+	}
+	ctx, cancel := context.WithTimeout(m.ctx, limit)
+	defer cancel()
+
+	tg, err := m.cfg.Locate(ctx, p, m.cfg.Port)
 	var res *client.Result
 	if err == nil {
 		opts := client.SendOptions{From: m.cfg.From, FromID: m.cfg.FromID}
-		res, err = client.Say(m.ctx, tg.Addr.Addr().String(), int(tg.Addr.Port()), text, opts)
+		res, err = client.Say(ctx, tg.Addr.Addr().String(), int(tg.Addr.Port()), text, opts)
 	} else {
 		tg = peerTarget(p)
+	}
+	if err != nil && ctx.Err() == context.DeadlineExceeded && m.ctx.Err() == nil {
+		// The limit, not a Close, ended it: say so. The entry is classified
+		// by m.ctx below, so this is recorded as a failure, not a cancel.
+		err = fmt.Errorf("no answer within %s: %w", limit, err)
 	}
 	m.record(peerKey, TextEntry(m.ctx, tg, text, res, err))
 	return err
