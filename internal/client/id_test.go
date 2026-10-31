@@ -83,7 +83,7 @@ var operations = map[string]func(t *testing.T, host string, port int, opts clien
 		return client.SendDir(context.Background(), host, port, plan, opts)
 	},
 	"Say": func(t *testing.T, host string, port int, opts client.SendOptions) (*client.Result, error) {
-		return client.Say(host, port, "hello", opts)
+		return client.Say(context.Background(), host, port, "hello", opts)
 	},
 }
 

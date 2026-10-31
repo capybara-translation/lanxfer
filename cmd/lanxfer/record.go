@@ -84,8 +84,9 @@ func sendEntry(ctx context.Context, tg target, path, name string, size int64, pl
 	return e
 }
 
-// textEntry describes one sent message for the history.
-func textEntry(tg target, text string, res *client.Result, err error) history.Entry {
+// textEntry describes one sent message for the history. ctx tells a
+// cancellation from a failure.
+func textEntry(ctx context.Context, tg target, text string, res *client.Result, err error) history.Entry {
 	e := history.Entry{
 		Dir:      history.Out,
 		PeerID:   tg.ID,
@@ -94,7 +95,7 @@ func textEntry(tg target, text string, res *client.Result, err error) history.En
 		Kind:     history.KindText,
 		Text:     text,
 	}
-	fillOutcome(context.Background(), &e, res, err)
+	fillOutcome(ctx, &e, res, err)
 	return e
 }
 

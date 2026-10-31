@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/capybara-translation/lanxfer/internal/discovery"
 	"github.com/capybara-translation/lanxfer/internal/history"
 	"github.com/capybara-translation/lanxfer/internal/identity"
 	"github.com/capybara-translation/lanxfer/internal/presence"
@@ -192,5 +196,67 @@ func TestRunSayResolveFailureIsNotRecorded(t *testing.T) {
 	}
 	if len(*got) != 0 {
 		t.Errorf("recorded %+v for an unresolved target", *got)
+	}
+}
+
+// interruptSelf plays Ctrl-C: it delivers SIGINT to this process, which the
+// command under test has by then asked to receive.
+func interruptSelf(t *testing.T) {
+	t.Helper()
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if err := self.Signal(os.Interrupt); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRunSayRecordsCancelled(t *testing.T) {
+	stubConfigDir(t)
+	arrived, release := make(chan struct{}), make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
+		<-release // hold the request until the test ends
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(release) }) // runs before ts.Close, which waits for the handler
+	got, _ := stubLocalRecord(t, nil)
+	go func() {
+		<-arrived // runSay has installed its signal handler and sent the request
+		interruptSelf(t)
+	}()
+
+	err := runSay([]string{"--port", strconv.Itoa(serverPort(t, ts)), "127.0.0.1", "hi"})
+	if !errors.Is(err, errCancelled) {
+		t.Errorf("err = %v, want errCancelled", err)
+	}
+	if len(*got) != 1 || (*got)[0].Status != history.StatusCancelled || (*got)[0].Text != "hi" {
+		t.Errorf("recorded %+v, want one cancelled text entry", *got)
+	}
+}
+
+func TestRunSayCancelledNameLookupIsNotRecorded(t *testing.T) {
+	stubConfigDir(t)
+	got, _ := stubLocalRecord(t, nil)
+	orig := discoverFunc
+	discoverFunc = func(ctx context.Context, _ int, _ time.Duration) ([]discovery.Peer, error) {
+		interruptSelf(t)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(5 * time.Second):
+			return nil, errors.New("context was not cancelled")
+		}
+	}
+	t.Cleanup(func() { discoverFunc = orig })
+
+	err := runSay([]string{"mac2", "hi"})
+	if !errors.Is(err, errCancelled) {
+		t.Errorf("err = %v, want errCancelled", err)
+	}
+	if len(*got) != 0 {
+		t.Errorf("recorded %+v although nothing was sent", *got)
 	}
 }

@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/humanize"
+	"github.com/capybara-translation/lanxfer/internal/peername"
 	"github.com/capybara-translation/lanxfer/internal/server"
 )
 
@@ -33,23 +36,27 @@ func runSay(args []string) error {
 		return err
 	}
 	hostname, _ := os.Hostname()
-	from, err := peerName(*nameFlag, hostname)
+	from, err := peername.Default(*nameFlag, hostname)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
 
+	// Ctrl-C cancels the name lookup and the request.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// The ID comes first: the name lookup needs it to tell this user's own
 	// receiver from another user's.
 	selfID := deviceID(os.Stderr)
-	tg, err := resolveTarget(context.Background(), targetArg, *port, selfID)
+	tg, err := resolveTarget(ctx, targetArg, *port, selfID)
 	if err != nil {
-		return err
+		return interrupted(ctx, err)
 	}
 	opts := client.SendOptions{From: from, FromID: selfID}
-	res, err := client.Say(tg.Addr.Addr().String(), int(tg.Addr.Port()), text, opts)
-	recordSent(*port, selfID, textEntry(tg, text, res, err), os.Stderr)
+	res, err := client.Say(ctx, tg.Addr.Addr().String(), int(tg.Addr.Port()), text, opts)
+	recordSent(*port, selfID, textEntry(ctx, tg, text, res, err), os.Stderr)
 	if err != nil {
-		return err
+		return interrupted(ctx, err)
 	}
 	dest := tg.Addr.Addr().String()
 	if tg.ByName {

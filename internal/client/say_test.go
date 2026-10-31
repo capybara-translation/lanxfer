@@ -2,13 +2,17 @@ package client_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/server"
@@ -51,7 +55,7 @@ func startMessageReceiver(t *testing.T) (string, int, *syncBuffer) {
 
 func TestSayRoundtrip(t *testing.T) {
 	host, port, out := startMessageReceiver(t)
-	if _, err := client.Say(host, port, "hello\nworld", client.SendOptions{From: "mac1"}); err != nil {
+	if _, err := client.Say(context.Background(), host, port, "hello\nworld", client.SendOptions{From: "mac1"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); !strings.Contains(got, " from mac1 (127.0.0.1) ---\nhello\nworld\n") {
@@ -61,7 +65,7 @@ func TestSayRoundtrip(t *testing.T) {
 
 func TestSayReturnsResult(t *testing.T) {
 	host, port, _ := startMessageReceiver(t)
-	res, err := client.Say(host, port, "hi", client.SendOptions{})
+	res, err := client.Say(context.Background(), host, port, "hi", client.SendOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +77,7 @@ func TestSayReturnsResult(t *testing.T) {
 
 func TestSayWithoutName(t *testing.T) {
 	host, port, out := startMessageReceiver(t)
-	if _, err := client.Say(host, port, "hi", client.SendOptions{}); err != nil {
+	if _, err := client.Say(context.Background(), host, port, "hi", client.SendOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := out.String(); !strings.Contains(got, " from 127.0.0.1 ---\n") {
@@ -83,7 +87,7 @@ func TestSayWithoutName(t *testing.T) {
 
 func TestSayTooLargeReportsServerHint(t *testing.T) {
 	host, port, _ := startMessageReceiver(t)
-	_, err := client.Say(host, port, strings.Repeat("a", server.MaxMessageSize+1), client.SendOptions{From: "mac1"})
+	_, err := client.Say(context.Background(), host, port, strings.Repeat("a", server.MaxMessageSize+1), client.SendOptions{From: "mac1"})
 	if err == nil || !strings.Contains(err.Error(), "lanxfer send") {
 		t.Errorf("err = %v, want the server's hint to use lanxfer send", err)
 	}
@@ -96,7 +100,36 @@ func TestSayConnectionRefused(t *testing.T) {
 	}
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	if _, err := client.Say("127.0.0.1", port, "hi", client.SendOptions{From: "mac1"}); err == nil {
+	if _, err := client.Say(context.Background(), "127.0.0.1", port, "hi", client.SendOptions{From: "mac1"}); err == nil {
 		t.Fatal("want error when nothing is listening")
+	}
+}
+
+func TestSayCancelled(t *testing.T) {
+	arrived, release := make(chan struct{}), make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(arrived)
+		<-release // hold the request until the test ends
+	}))
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(release) }) // runs before ts.Close, which waits for the handler
+	host, port := splitHostPort(t, ts.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Say(ctx, host, port, "hi", client.SendOptions{})
+		done <- err
+	}()
+	<-arrived
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want it to wrap context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Say did not return after the context was cancelled")
 	}
 }

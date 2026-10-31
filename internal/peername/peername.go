@@ -2,7 +2,10 @@
 // other: a receiver's discovery name and a message sender's name.
 package peername
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // MaxLen is the maximum length of a peer name in bytes.
 const MaxLen = 64
@@ -19,4 +22,21 @@ func Validate(name string) error {
 		}
 	}
 	return nil
+}
+
+// Default picks the name a machine announces: flagValue if given (it must be
+// valid), otherwise the hostname without its ".local" suffix, or "lanxfer"
+// when that is not a valid name.
+func Default(flagValue, hostname string) (string, error) {
+	if flagValue != "" {
+		if err := Validate(flagValue); err != nil {
+			return "", err
+		}
+		return flagValue, nil
+	}
+	name := strings.TrimSuffix(hostname, ".local")
+	if Validate(name) != nil {
+		return "lanxfer", nil
+	}
+	return name, nil
 }

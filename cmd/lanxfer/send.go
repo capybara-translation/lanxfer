@@ -18,6 +18,7 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/discovery"
 	"github.com/capybara-translation/lanxfer/internal/humanize"
+	"github.com/capybara-translation/lanxfer/internal/peername"
 	"github.com/capybara-translation/lanxfer/internal/presence"
 )
 
@@ -43,7 +44,7 @@ func runSend(args []string) error {
 	targetArg, path := rest[0], rest[1]
 
 	hostname, _ := os.Hostname()
-	from, err := peerName(*nameFlag, hostname)
+	from, err := peername.Default(*nameFlag, hostname)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,16 +10,17 @@ import (
 	"strings"
 )
 
-// Say posts a text message to the lanxfer receiver at host:port. opts.From
-// and opts.FromID identify the sender and are left out of the request when
-// empty; opts.Progress is ignored. The returned Result carries only PeerID.
-func Say(host string, port int, text string, opts SendOptions) (*Result, error) {
+// Say posts a text message to the lanxfer receiver at host:port. Cancelling
+// ctx abandons the request. opts.From and opts.FromID identify the sender and
+// are left out of the request when empty; opts.Progress is ignored. The
+// returned Result carries only PeerID.
+func Say(ctx context.Context, host string, port int, text string, opts SendOptions) (*Result, error) {
 	u := url.URL{
 		Scheme: "http",
 		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
 		Path:   "/messages",
 	}
-	req, err := http.NewRequest(http.MethodPost, u.String(), strings.NewReader(text))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), strings.NewReader(text))
 	if err != nil {
 		return nil, err
 	}

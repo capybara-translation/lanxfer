@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"github.com/capybara-translation/lanxfer/internal/identity"
@@ -42,7 +41,7 @@ func runRecv(args []string) error {
 	*dir = absDir
 
 	hostname, _ := os.Hostname()
-	name, err := peerName(*nameFlag, hostname)
+	name, err := peername.Default(*nameFlag, hostname)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
@@ -74,20 +73,4 @@ func runRecv(args []string) error {
 		Logger:    logger,
 		Out:       os.Stdout,
 	})
-}
-
-// peerName picks the name announced to other machines: the --name flag if
-// given, otherwise the hostname without its ".local" suffix.
-func peerName(flagValue, hostname string) (string, error) {
-	if flagValue != "" {
-		if err := peername.Validate(flagValue); err != nil {
-			return "", err
-		}
-		return flagValue, nil
-	}
-	name := strings.TrimSuffix(hostname, ".local")
-	if peername.Validate(name) != nil {
-		return "lanxfer", nil
-	}
-	return name, nil
 }

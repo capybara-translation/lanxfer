@@ -301,7 +301,7 @@ func TestRunReceivesAndRecords(t *testing.T) {
 
 func TestRunDeliversText(t *testing.T) {
 	h := startNode(t, nil)
-	if _, err := client.Say("127.0.0.1", h.cfg.Port, "ping 123", client.SendOptions{From: "sender"}); err != nil {
+	if _, err := client.Say(context.Background(), "127.0.0.1", h.cfg.Port, "ping 123", client.SendOptions{From: "sender"}); err != nil {
 		t.Fatalf("Say: %v", err)
 	}
 	e := h.waitEvent(func(e Event) bool { return e.Entry != nil })
