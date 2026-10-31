@@ -70,9 +70,11 @@ type Service struct {
 	closed  bool // quit has begun; nothing may start the receiver again
 	started atomic.Bool
 
-	mu      sync.Mutex // guards mgr and openKey
-	mgr     *transfer.Manager
-	openKey string
+	mu           sync.Mutex // guards mgr, openKey, notifier and windowActive
+	mgr          *transfer.Manager
+	openKey      string
+	notifier     notifier    // nil: no notifications
+	windowActive func() bool // reports whether the main window is in front
 
 	quitOnce sync.Once
 }
@@ -298,6 +300,32 @@ func (s *Service) addEntry(e history.Entry) {
 	key := s.store.Add(e)
 	s.cfg.Emitter.Emit(eventMessage, MessageEvent{Key: string(key), Entry: e})
 	s.chatsT.trigger()
+	s.notifyArrival(e, key)
+}
+
+// setNotifier sets where arrivals are announced and how to tell that the main
+// window is in front. Call it before the app runs.
+func (s *Service) setNotifier(n notifier, windowActive func() bool) {
+	s.mu.Lock()
+	s.notifier, s.windowActive = n, windowActive
+	s.mu.Unlock()
+}
+
+// notifyArrival announces a received entry unless the user is looking at its
+// chat. Entries read from the history file never come through here, so the
+// start-up load raises nothing. The notifier returns at once.
+func (s *Service) notifyArrival(e history.Entry, key chat.Key) {
+	s.mu.Lock()
+	n, active, open := s.notifier, s.windowActive, s.openKey
+	s.mu.Unlock()
+	if n == nil || !s.loaded.Load() {
+		return
+	}
+	focused := active != nil && active()
+	if !shouldNotify(e, chat.Key(open), key, focused) {
+		return
+	}
+	n.Show(s.store.Name(key), notificationBody(e), key)
 }
 
 // emitChats sends the whole list. It is the throttle's callback.

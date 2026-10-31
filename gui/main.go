@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/capybara-translation/lanxfer/internal/chat"
 	"github.com/capybara-translation/lanxfer/internal/identity"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -63,12 +64,14 @@ func main() {
 	})
 
 	var win *application.WebviewWindow
+	// closeNotify stops the notifier's timer or goroutine; set once it exists.
+	var closeNotify func()
 	app = application.New(application.Options{
 		Name:        "lanxfer",
 		Description: "Send files and messages to other machines on the LAN",
 		// Only the service is bound: the page shows text from other machines,
 		// and must not be able to start or stop the receiver.
-		Services: []application.Service{application.NewService(svc)},
+		Services: append([]application.Service{application.NewService(svc)}, platformServices()...),
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -90,7 +93,12 @@ func main() {
 		},
 		// Quit, from the tray or Cmd+Q, must stop the sends and the receiver,
 		// and free its ports, before the process exits.
-		OnShutdown: svc.quit,
+		OnShutdown: func() {
+			if closeNotify != nil {
+				closeNotify()
+			}
+			svc.quit()
+		},
 	})
 
 	win = app.Window.NewWithOptions(application.WebviewWindowOptions{
@@ -100,7 +108,12 @@ func main() {
 		URL:            "/",
 		EnableFileDrop: true,
 	})
+	// Whether the window is in front decides if an arrival is announced.
+	focus := &focusTracker{visible: win.IsVisible}
+	win.OnWindowEvent(events.Common.WindowFocus, func(*application.WindowEvent) { focus.setFocused(true) })
+	win.OnWindowEvent(events.Common.WindowLostFocus, func(*application.WindowEvent) { focus.setFocused(false) })
 	win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		focus.setFocused(false)
 		win.Hide()
 		e.Cancel()
 	})
@@ -113,6 +126,14 @@ func main() {
 	win.OnWindowEvent(events.Common.WindowFilesDropped, svc.handleFilesDropped)
 
 	newTray(app, win, svc.saveDir)
+
+	// A click on a notification opens that chat in the main window.
+	var n notifier
+	n, closeNotify = newPlatformNotifier(app, logger, func(key chat.Key) {
+		showWindow(win)
+		app.Event.Emit(eventOpenChat, string(key))
+	})
+	svc.setNotifier(n, focus.active)
 
 	// The service loads the history and starts the receiver in ServiceStartup.
 	if err := app.Run(); err != nil {

@@ -490,6 +490,15 @@ func (s *Store) summarize(k Key, c *chat) Summary {
 	return sum
 }
 
+// Name returns the name shown for a chat in the peer list. An old key that
+// SetPeers regrouped gives the name of the chat it moved to.
+func (s *Store) Name(key Key) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := s.resolve(key)
+	return s.summarize(k, s.chats[k]).Name
+}
+
 // Messages returns one page of a chat, oldest first. before counts messages
 // from the newest: 0 gives the newest page. next is the value to pass as
 // before for the next older page, or -1 when there is none. limit is capped at

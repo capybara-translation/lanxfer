@@ -260,6 +260,32 @@ func TestSummaryNameFollowsPeer(t *testing.T) {
 	}
 }
 
+func TestNameMatchesSummary(t *testing.T) {
+	s := New()
+	s.Add(text(history.In, "AAAA", "old", "10.0.0.2", "hello", at(1)))
+	if got := s.Name("id:AAAA"); got != "old" {
+		t.Errorf("Name = %q, want old", got)
+	}
+	s.SetPeers([]presence.Peer{peer("AAAA", "renamed", "10.0.0.2", true, at(2))})
+	if got := s.Name("id:AAAA"); got != "renamed" {
+		t.Errorf("Name after rename = %q, want renamed", got)
+	}
+	// A key with no chat and no peer still gets a usable name.
+	if got := s.Name("id:UNKNOWN1234"); got != "UNKNOWN1" {
+		t.Errorf("Name of an unknown key = %q", got)
+	}
+}
+
+func TestNameFollowsAlias(t *testing.T) {
+	s := New()
+	s.Add(text(history.In, "", "Win", "", "x", at(1)))
+	old := Key("name:win")
+	s.SetPeers([]presence.Peer{peer("BBBB", "Win", "10.0.0.5", true, at(2))})
+	if got := s.Name(old); got != "Win" {
+		t.Errorf("Name of a regrouped key = %q, want Win", got)
+	}
+}
+
 func TestPeerWithoutIDHasNameKey(t *testing.T) {
 	s := New()
 	s.SetPeers([]presence.Peer{peer("", "Win", "10.0.0.5", true, at(0))})

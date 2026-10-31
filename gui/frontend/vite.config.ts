@@ -1,5 +1,6 @@
 import {defineConfig} from "vite";
 import {mkdirSync, writeFileSync} from "node:fs";
+import {fileURLToPath} from "node:url";
 import wails from "@wailsio/runtime/plugins/vite";
 
 // Vite empties dist/ before each build. The Go side embeds that folder, and
@@ -19,6 +20,15 @@ export default defineConfig({
     host: "127.0.0.1",
     port: Number(process.env.WAILS_VITE_PORT) || 9245,
     strictPort: true,
+  },
+  build: {
+    // Two pages: the main window and the small notification window (macOS).
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        toast: fileURLToPath(new URL("./toast.html", import.meta.url)),
+      },
+    },
   },
   plugins: [wails("./bindings"), keepPlaceholder],
 });
