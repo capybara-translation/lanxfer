@@ -24,8 +24,10 @@ var assets embed.FS
 // second launch.
 const bundleID = "com.capybara-translation.lanxfer"
 
-// portFromEnv returns the port from LANXFER_PORT. The variable exists so that
-// development runs do not collide with an installed copy; users do not set it.
+// portFromEnv returns the port from LANXFER_PORT. The variable moves the
+// receiver to another port for development; users do not set it. It does not
+// let a development build run beside an installed copy: both use the same
+// single-instance ID (bundleID) and the same config folder.
 func portFromEnv(logger *log.Logger) int {
 	v := os.Getenv("LANXFER_PORT")
 	if v == "" {
