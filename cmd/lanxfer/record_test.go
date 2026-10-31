@@ -26,7 +26,7 @@ func TestRecordSentUsesLocalReceiver(t *testing.T) {
 	got, port := stubLocalRecord(t, nil)
 	var warn bytes.Buffer
 
-	recordSent(8500, sampleEntry(), &warn)
+	recordSent(8500, idSelf, sampleEntry(), &warn)
 
 	if len(*got) != 1 || (*got)[0].Text != "hello" || *port != 8500 {
 		t.Errorf("local receiver got %+v on port %d", *got, *port)
@@ -39,6 +39,34 @@ func TestRecordSentUsesLocalReceiver(t *testing.T) {
 	}
 }
 
+func TestRecordSentPassesOwnID(t *testing.T) {
+	stubConfigDir(t)
+	stubLocalRecord(t, nil)
+	ids := watchSelfIDs(t)
+	var warn bytes.Buffer
+
+	recordSent(8425, idSelf, sampleEntry(), &warn)
+
+	if len(ids.record) != 1 || ids.record[0] != idSelf {
+		t.Errorf("local receiver was given IDs %v, want [%s]", ids.record, idSelf)
+	}
+}
+
+func TestRecordSentFallsBackToFileWhenReceiverIsAnotherDevices(t *testing.T) {
+	// A receiver of another user answers 409, which the client reports as
+	// ErrNoLocalReceiver: the entry goes to this user's own file.
+	dir := stubConfigDir(t)
+	stubLocalRecord(t, client.ErrNoLocalReceiver)
+	var warn bytes.Buffer
+
+	recordSent(8425, idSelf, sampleEntry(), &warn)
+
+	entries, err := history.ReadAll(filepath.Join(dir, "history.jsonl"))
+	if err != nil || len(entries) != 1 {
+		t.Errorf("entries = %+v, err = %v", entries, err)
+	}
+}
+
 func TestRecordSentFallsBackToFile(t *testing.T) {
 	// The folder does not exist yet: recordSent has to create it.
 	dir := filepath.Join(t.TempDir(), "lanxfer")
@@ -46,7 +74,7 @@ func TestRecordSentFallsBackToFile(t *testing.T) {
 	stubLocalRecord(t, client.ErrNoLocalReceiver)
 	var warn bytes.Buffer
 
-	recordSent(8425, sampleEntry(), &warn)
+	recordSent(8425, idSelf, sampleEntry(), &warn)
 
 	if warn.Len() != 0 {
 		t.Errorf("unexpected warning %q", warn.String())
@@ -65,7 +93,7 @@ func TestRecordSentWarnsOnRefusal(t *testing.T) {
 	stubLocalRecord(t, errors.New("local receiver returned 500 Internal Server Error: disk full"))
 	var warn bytes.Buffer
 
-	recordSent(8425, sampleEntry(), &warn)
+	recordSent(8425, idSelf, sampleEntry(), &warn)
 
 	if got := warn.String(); !strings.HasPrefix(got, "warning: could not record history: ") || !strings.Contains(got, "disk full") || strings.Count(got, "\n") != 1 {
 		t.Errorf("warning = %q", got)
@@ -85,7 +113,7 @@ func TestRecordSentWarnsWhenFileCannotBeWritten(t *testing.T) {
 	stubLocalRecord(t, client.ErrNoLocalReceiver)
 	var warn bytes.Buffer
 
-	recordSent(8425, sampleEntry(), &warn)
+	recordSent(8425, idSelf, sampleEntry(), &warn)
 
 	if got := warn.String(); !strings.HasPrefix(got, "warning: could not record history: ") || strings.Count(got, "\n") != 1 {
 		t.Errorf("warning = %q", got)

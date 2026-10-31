@@ -13,7 +13,10 @@ import (
 	"time"
 
 	"github.com/capybara-translation/lanxfer/internal/history"
+	"github.com/capybara-translation/lanxfer/internal/netguard"
+	"github.com/capybara-translation/lanxfer/internal/peername"
 	"github.com/capybara-translation/lanxfer/internal/presence"
+	"github.com/capybara-translation/lanxfer/internal/server"
 )
 
 // ErrNoLocalReceiver means the receiving process on this machine cannot be
@@ -59,7 +62,17 @@ func noLocalReceiver(cause any) error {
 // LocalPeers asks the receiving process on this machine, listening on port,
 // for the peers it knows. Any failure to get a proper list is reported as
 // ErrNoLocalReceiver, so the caller can fall back to a broadcast search.
-func LocalPeers(port int) ([]presence.Peer, error) {
+//
+// selfID is this machine's device ID. On a machine shared by several users,
+// the process answering on port may belong to another user, whose list must
+// not decide where this user's files go. The list is therefore used only if
+// the response names selfID as the answering receiver's ID. The ID is also
+// broadcast on the LAN, so this stops another user's ordinary receiver, not
+// deliberate spoofing.
+//
+// Entries that could not be a send target (an address outside the private
+// ranges, an invalid name) are dropped.
+func LocalPeers(port int, selfID string) ([]presence.Peer, error) {
 	resp, err := newLocalClient(localTimeout).Get(localURL(port, "/local/peers"))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrNoLocalReceiver, err)
@@ -67,6 +80,9 @@ func LocalPeers(port int) ([]presence.Peer, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return nil, noLocalReceiver(resp.Status)
+	}
+	if peerID(resp) != selfID {
+		return nil, noLocalReceiver("receiver belongs to another device ID")
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxLocalPeersBody))
 	if err != nil {
@@ -79,7 +95,13 @@ func LocalPeers(port int) ([]presence.Peer, error) {
 	if peers == nil { // JSON null, not an array
 		return nil, noLocalReceiver("invalid peer list")
 	}
-	return peers, nil
+	usable := make([]presence.Peer, 0, len(peers))
+	for _, p := range peers {
+		if netguard.IsAllowedRemote(p.Addr.String()) && peername.Validate(p.Name) == nil {
+			usable = append(usable, p)
+		}
+	}
+	return usable, nil
 }
 
 // LocalRecord asks the receiving process on this machine, listening on port,
@@ -87,7 +109,13 @@ func LocalPeers(port int) ([]presence.Peer, error) {
 // ErrNoLocalReceiver means the receiver cannot take entries. Any other error
 // means it was reached but refused or failed; the caller should report it as
 // a warning.
-func LocalRecord(port int, e history.Entry) error {
+//
+// selfID is this machine's device ID, sent in FromIDHeader. A receiver with
+// another ID (another user's, on a shared machine) refuses with 409 without
+// recording anything; that is reported as ErrNoLocalReceiver so the caller
+// writes the entry to its own history. The ID is broadcast on the LAN, so
+// this stops another user's ordinary receiver, not deliberate spoofing.
+func LocalRecord(port int, selfID string, e history.Entry) error {
 	data, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -97,6 +125,9 @@ func LocalRecord(port int, e history.Entry) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if selfID != "" {
+		req.Header.Set(server.FromIDHeader, selfID)
+	}
 
 	resp, err := newLocalClient(localRecordTimeout).Do(req)
 	if err != nil {
@@ -106,7 +137,7 @@ func LocalRecord(port int, e history.Entry) error {
 	switch resp.StatusCode {
 	case http.StatusNoContent:
 		return nil
-	case http.StatusNotFound, http.StatusMethodNotAllowed:
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusConflict:
 		return noLocalReceiver(resp.Status)
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))

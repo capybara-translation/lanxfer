@@ -38,13 +38,16 @@ func runSay(args []string) error {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
 
-	tg, err := resolveTarget(context.Background(), targetArg, *port)
+	// The ID comes first: the name lookup needs it to tell this user's own
+	// receiver from another user's.
+	selfID := deviceID(os.Stderr)
+	tg, err := resolveTarget(context.Background(), targetArg, *port, selfID)
 	if err != nil {
 		return err
 	}
-	opts := client.SendOptions{From: from, FromID: deviceID(os.Stderr)}
+	opts := client.SendOptions{From: from, FromID: selfID}
 	res, err := client.Say(tg.Addr.Addr().String(), int(tg.Addr.Port()), text, opts)
-	recordSent(*port, textEntry(tg, text, res, err), os.Stderr)
+	recordSent(*port, selfID, textEntry(tg, text, res, err), os.Stderr)
 	if err != nil {
 		return err
 	}

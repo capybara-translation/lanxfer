@@ -90,7 +90,7 @@ func TestCollectPeers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stubLocalPeers(t, tt.localPeers, tt.localErr)
 			calls := stubDiscover(t, []discovery.Peer{mac2}, nil)
-			rows, err := collectPeers(t.Context(), 8425, time.Second)
+			rows, err := collectPeers(t.Context(), 8425, idSelf, time.Second)
 			if err != nil || len(rows) != tt.wantRows {
 				t.Fatalf("rows = %+v, err = %v", rows, err)
 			}
@@ -101,9 +101,34 @@ func TestCollectPeers(t *testing.T) {
 	}
 }
 
+func TestCollectPeersPassesOwnID(t *testing.T) {
+	stubLocalPeers(t, nil, client.ErrNoLocalReceiver)
+	ids := watchSelfIDs(t)
+	stubDiscover(t, nil, nil)
+	if _, err := collectPeers(t.Context(), 8425, idSelf, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids.peers) != 1 || ids.peers[0] != idSelf {
+		t.Errorf("local API was given IDs %v, want [%s]", ids.peers, idSelf)
+	}
+}
+
+func TestRunPeersAsksLocalReceiverWithOwnID(t *testing.T) {
+	dir := stubConfigDir(t)
+	stubLocalPeers(t, []presence.Peer{onlinePeer("mac2", idMac2, "192.168.68.54:8425")}, nil)
+	ids := watchSelfIDs(t)
+	stubDiscover(t, nil, errors.New("must not be called"))
+	if err := runPeers(nil); err != nil {
+		t.Fatal(err)
+	}
+	if want := storedDeviceID(t, dir); len(ids.peers) != 1 || ids.peers[0] != want {
+		t.Errorf("local API was given IDs %v, want [%s]", ids.peers, want)
+	}
+}
+
 func TestCollectPeersNoneFound(t *testing.T) {
 	stubDiscover(t, nil, nil)
-	rows, err := collectPeers(t.Context(), 8425, time.Second)
+	rows, err := collectPeers(t.Context(), 8425, idSelf, time.Second)
 	if err != nil || len(rows) != 0 {
 		t.Errorf("rows = %+v, err = %v", rows, err)
 	}

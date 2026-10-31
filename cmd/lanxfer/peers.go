@@ -26,7 +26,8 @@ func runPeers(args []string) error {
 		return fmt.Errorf("%w: peers takes no arguments", errUsage)
 	}
 
-	rows, err := collectPeers(context.Background(), *port, *wait)
+	selfID := deviceID(os.Stderr)
+	rows, err := collectPeers(context.Background(), *port, selfID, *wait)
 	if err != nil {
 		return err
 	}
@@ -48,9 +49,10 @@ type peerRow struct {
 
 // collectPeers returns the peer list of the receiver on this machine, which
 // also has the peers that are offline. Without a usable one it broadcasts a
-// query instead, which finds online peers only.
-func collectPeers(ctx context.Context, port int, wait time.Duration) ([]peerRow, error) {
-	if list, err := localPeersFunc(port); err == nil && len(list) > 0 {
+// query instead, which finds online peers only. selfID is this machine's
+// device ID, with which the local receiver is recognized as this user's own.
+func collectPeers(ctx context.Context, port int, selfID string, wait time.Duration) ([]peerRow, error) {
+	if list, err := localPeersFunc(port, selfID); err == nil && len(list) > 0 {
 		return rowsFromPresence(list), nil
 	}
 	found, err := discoverFunc(ctx, port, wait)

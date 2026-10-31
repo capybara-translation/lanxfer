@@ -123,7 +123,6 @@ func TestResponsesCarryDeviceID(t *testing.T) {
 	}{
 		{"file upload", http.MethodPut, "/files/a.txt", "hi", lanRemote, http.StatusCreated},
 		{"message", http.MethodPost, "/messages", "hi", lanRemote, http.StatusNoContent},
-		{"guard rejection", http.MethodPut, "/files/b.txt", "hi", "203.0.113.5:5555", http.StatusForbidden},
 		{"unknown path", http.MethodGet, "/nope", "", lanRemote, http.StatusNotFound},
 		{"bad name", http.MethodPut, "/files/..%2Fx", "hi", lanRemote, http.StatusBadRequest},
 	}
@@ -135,6 +134,26 @@ func TestResponsesCarryDeviceID(t *testing.T) {
 		if got := w.Header().Get(IDHeader); got != deviceID {
 			t.Errorf("%s: %s = %q, want %q", tt.name, IDHeader, got, deviceID)
 		}
+	}
+}
+
+func TestRejectedAddressLearnsNoDeviceID(t *testing.T) {
+	r := newRig(t, WithDeviceID(deviceID))
+	w := r.do(http.MethodPut, "/files/b.txt", "hi", reqOpts{remote: "203.0.113.5:5555"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+	if got := w.Header().Get(IDHeader); got != "" {
+		t.Errorf("%s = %q, want none for a public source address", IDHeader, got)
+	}
+	// An allowed address that sends an Origin header is refused too, but it
+	// is a LAN or local caller and still learns who answered.
+	w = r.do(http.MethodPut, "/files/b.txt", "hi", reqOpts{origin: "https://evil.example"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("Origin: status = %d, want 403", w.Code)
+	}
+	if got := w.Header().Get(IDHeader); got != deviceID {
+		t.Errorf("Origin rejection: %s = %q, want %q", IDHeader, got, deviceID)
 	}
 }
 
@@ -482,6 +501,38 @@ func TestLocalHistoryRequiresJSONContentType(t *testing.T) {
 	r.h.ServeHTTP(w, req)
 	if w.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("no Content-Type: status = %d, want 415", w.Code)
+	}
+}
+
+func TestLocalHistoryRequiresMatchingDeviceID(t *testing.T) {
+	body := `{"v":1,"dir":"out","kind":"text","status":"ok"}`
+	tests := []struct {
+		name         string
+		serverID     string // "" starts the server without a device ID
+		fromID       string
+		wantStatus   int
+		wantRecorded int
+	}{
+		{"same ID", deviceID, deviceID, http.StatusNoContent, 1},
+		{"other receiver's ID", deviceID, testID, http.StatusConflict, 0},
+		{"no ID from client", deviceID, "", http.StatusConflict, 0},
+		{"malformed ID from client", deviceID, "bogus", http.StatusConflict, 0},
+		{"ID-less server and ID-less client", "", "", http.StatusNoContent, 1},
+		{"ID-less server and client with ID", "", testID, http.StatusConflict, 0},
+	}
+	for _, tt := range tests {
+		var opts []Option
+		if tt.serverID != "" {
+			opts = append(opts, WithDeviceID(tt.serverID))
+		}
+		r := newRig(t, opts...)
+		w := r.do(http.MethodPost, "/local/history", body, reqOpts{remote: localRemote, fromID: tt.fromID})
+		if w.Code != tt.wantStatus {
+			t.Errorf("%s: status = %d, want %d (%s)", tt.name, w.Code, tt.wantStatus, w.Body)
+		}
+		if got := len(r.rec.list()); got != tt.wantRecorded {
+			t.Errorf("%s: recorded %d entries, want %d", tt.name, got, tt.wantRecorded)
+		}
 	}
 }
 

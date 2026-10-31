@@ -98,6 +98,31 @@ func TestRunSendRecordsFile(t *testing.T) {
 	}
 }
 
+func TestRunSendUsesOneDeviceIDEverywhere(t *testing.T) {
+	dir := stubConfigDir(t)
+	port := startReceiver(t)
+	src := filepath.Join(t.TempDir(), "a.txt")
+	if err := os.WriteFile(src, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubLocalPeers(t, []presence.Peer{onlinePeer("mac2", idMac2, "127.0.0.1:"+strconv.Itoa(port))}, nil)
+	stubLocalRecord(t, nil)
+	ids := watchSelfIDs(t)
+
+	if err := runSend([]string{"--port", strconv.Itoa(port), "mac2", src}); err != nil {
+		t.Fatal(err)
+	}
+	// The ID has to exist before the name is resolved: the lookup already
+	// needs it to recognize this machine's own receiver.
+	want := storedDeviceID(t, dir)
+	if len(ids.peers) != 1 || ids.peers[0] != want {
+		t.Errorf("peer list asked with %v, want [%s]", ids.peers, want)
+	}
+	if len(ids.record) != 1 || ids.record[0] != want {
+		t.Errorf("history recorded with %v, want [%s]", ids.record, want)
+	}
+}
+
 func TestRunSendRecordsFolder(t *testing.T) {
 	stubConfigDir(t)
 	port := startReceiver(t)

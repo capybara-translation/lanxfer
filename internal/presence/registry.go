@@ -77,7 +77,11 @@ func keyOf(p *Peer) string {
 // and nothing else: the name in an HTTP request is whatever the sender chose,
 // not the one the peer announced.
 func (r *Registry) Observe(s Sighting, now time.Time) (changed bool) {
-	if !s.Addr.IsValid() || peername.Validate(s.Name) != nil {
+	if !s.Addr.IsValid() {
+		return false
+	}
+	// The name is only used for a sighting with a port; an HTTP one ignores it.
+	if s.Addr.Port() != 0 && peername.Validate(s.Name) != nil {
 		return false
 	}
 	id := s.ID

@@ -35,10 +35,12 @@ func deviceID(warn io.Writer) string {
 
 // recordSent writes a send to the history. When a receiver runs on this
 // machine it takes the entry, which keeps it the only writer of the file.
-// Otherwise the entry is appended directly. A failure prints one warning to
-// warn and never changes the result of the command.
-func recordSent(port int, e history.Entry, warn io.Writer) {
-	err := localRecordFunc(port, e)
+// Otherwise the entry is appended directly, which includes the case of a
+// receiver that belongs to another device ID (another user's, on a shared
+// machine). A failure prints one warning to warn and never changes the result
+// of the command. selfID is this machine's device ID.
+func recordSent(port int, selfID string, e history.Entry, warn io.Writer) {
+	err := localRecordFunc(port, selfID, e)
 	if errors.Is(err, client.ErrNoLocalReceiver) {
 		err = appendHistory(e)
 	}

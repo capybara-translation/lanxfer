@@ -117,6 +117,36 @@ func TestRunSayRecordsHistory(t *testing.T) {
 	}
 }
 
+func TestRunSayUsesOneDeviceIDEverywhere(t *testing.T) {
+	dir := stubConfigDir(t)
+	var gotFromID string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotFromID = r.Header.Get(server.FromIDHeader)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(ts.Close)
+	port := serverPort(t, ts)
+	stubLocalPeers(t, []presence.Peer{onlinePeer("mac2", idMac2, "127.0.0.1:"+strconv.Itoa(port))}, nil)
+	stubLocalRecord(t, nil)
+	ids := watchSelfIDs(t)
+
+	// The ID has to exist before the name is resolved: the lookup already
+	// needs it to recognize this machine's own receiver.
+	if err := runSay([]string{"--port", strconv.Itoa(port), "mac2", "hi"}); err != nil {
+		t.Fatal(err)
+	}
+	want := storedDeviceID(t, dir)
+	if len(ids.peers) != 1 || ids.peers[0] != want {
+		t.Errorf("peer list asked with %v, want [%s]", ids.peers, want)
+	}
+	if len(ids.record) != 1 || ids.record[0] != want {
+		t.Errorf("history recorded with %v, want [%s]", ids.record, want)
+	}
+	if gotFromID != want {
+		t.Errorf("sender ID header = %q, want %q", gotFromID, want)
+	}
+}
+
 func TestRunSayRecordsFailure(t *testing.T) {
 	stubConfigDir(t)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -11,6 +11,7 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/discovery"
 	"github.com/capybara-translation/lanxfer/internal/history"
+	"github.com/capybara-translation/lanxfer/internal/identity"
 	"github.com/capybara-translation/lanxfer/internal/presence"
 )
 
@@ -40,8 +41,8 @@ func runTests(m *testing.M) int {
 	defer os.RemoveAll(dir)
 
 	configDirFunc = func() (string, error) { return dir, nil }
-	localPeersFunc = func(int) ([]presence.Peer, error) { return nil, client.ErrNoLocalReceiver }
-	localRecordFunc = func(int, history.Entry) error { return client.ErrNoLocalReceiver }
+	localPeersFunc = func(int, string) ([]presence.Peer, error) { return nil, client.ErrNoLocalReceiver }
+	localRecordFunc = func(int, string, history.Entry) error { return client.ErrNoLocalReceiver }
 	discoverFunc = func(context.Context, int, time.Duration) ([]discovery.Peer, error) { return nil, nil }
 	queryAddrFunc = func(context.Context, netip.AddrPort, time.Duration) ([]discovery.Peer, error) { return nil, nil }
 	return m.Run()
@@ -70,12 +71,44 @@ func stubLocalPeers(t *testing.T, peers []presence.Peer, err error) *int {
 	t.Helper()
 	calls := 0
 	orig := localPeersFunc
-	localPeersFunc = func(int) ([]presence.Peer, error) {
+	localPeersFunc = func(int, string) ([]presence.Peer, error) {
 		calls++
 		return peers, err
 	}
 	t.Cleanup(func() { localPeersFunc = orig })
 	return &calls
+}
+
+// selfIDs lists the device IDs the commands passed to the local API.
+type selfIDs struct{ peers, record []string }
+
+// watchSelfIDs wraps the current localPeersFunc and localRecordFunc, so call
+// it after stubbing them, and records the device ID each call was given.
+func watchSelfIDs(t *testing.T) *selfIDs {
+	t.Helper()
+	ids := &selfIDs{}
+	origPeers, origRecord := localPeersFunc, localRecordFunc
+	localPeersFunc = func(port int, selfID string) ([]presence.Peer, error) {
+		ids.peers = append(ids.peers, selfID)
+		return origPeers(port, selfID)
+	}
+	localRecordFunc = func(port int, selfID string, e history.Entry) error {
+		ids.record = append(ids.record, selfID)
+		return origRecord(port, selfID, e)
+	}
+	t.Cleanup(func() { localPeersFunc, localRecordFunc = origPeers, origRecord })
+	return ids
+}
+
+// storedDeviceID returns the device ID kept in dir, which deviceID creates
+// when there is none.
+func storedDeviceID(t *testing.T, dir string) string {
+	t.Helper()
+	id, err := identity.LoadOrCreate(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 // stubQueryAddr replaces queryAddrFunc for one test and returns a pointer to
@@ -99,7 +132,7 @@ func stubLocalRecord(t *testing.T, err error) (*[]history.Entry, *int) {
 	var got []history.Entry
 	var gotPort int
 	orig := localRecordFunc
-	localRecordFunc = func(port int, e history.Entry) error {
+	localRecordFunc = func(port int, _ string, e history.Entry) error {
 		gotPort = port
 		got = append(got, e)
 		return err

@@ -126,6 +126,24 @@ func TestRegistryLegacyMergedIntoID(t *testing.T) {
 	}
 }
 
+func TestRegistryHTTPSightingWithoutNameRefreshes(t *testing.T) {
+	// An HTTP sender with an unusable name is reported with an empty Name;
+	// the name is not used for a port-0 sighting, so it must still count.
+	r := NewRegistry("")
+	r.Observe(Sighting{ID: idA, Name: "mac1", Addr: ap("192.168.1.10:8080")}, t0)
+	t1 := t0.Add(time.Minute)
+	if r.Observe(Sighting{ID: idA, Addr: ap("192.168.1.10:0")}, t1) {
+		t.Error("refreshing LastSeen alone must not report a change")
+	}
+	if p := mustOne(t, r); !p.LastSeen.Equal(t1) || p.Name != "mac1" {
+		t.Errorf("peer = %+v, want LastSeen %v and Name mac1", p, t1)
+	}
+	// A discovery sighting still needs a valid name.
+	if r.Observe(Sighting{ID: idB, Addr: ap("192.168.1.20:8080")}, t1) {
+		t.Error("a sighting with a port and no name must be ignored")
+	}
+}
+
 func TestRegistryHTTPSightingOnlyRefreshes(t *testing.T) {
 	r := NewRegistry("")
 	// No entry: no-op, even with a valid ID.

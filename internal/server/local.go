@@ -74,8 +74,19 @@ func (s *Server) handleLocalPeers(w http.ResponseWriter, r *http.Request) {
 
 // handleLocalHistory appends one entry sent by a CLI process on this machine,
 // so that the receiving process stays the only writer of the history file.
+//
+// The caller must name this receiver's device ID in FromIDHeader. On a
+// machine shared by several users the CLI of one user may reach another
+// user's receiver on the same port; the entry (a message text, a source path)
+// must not land in that user's history. The ID is also broadcast on the LAN,
+// so this stops an ordinary receiver of another user, not deliberate spoofing.
+// A receiver without an ID compares equal only to a caller without one.
 func (s *Server) handleLocalHistory(w http.ResponseWriter, r *http.Request) {
 	if !requireLoopback(w, r) {
+		return
+	}
+	if r.Header.Get(FromIDHeader) != s.deviceID {
+		http.Error(w, "not this device's receiver", http.StatusConflict)
 		return
 	}
 	// A cross-site form can send text/plain without a preflight; requiring

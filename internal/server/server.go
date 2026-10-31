@@ -19,10 +19,12 @@ import (
 )
 
 // FromIDHeader carries the sender's device ID. A value that is not a valid
-// ID is ignored.
+// ID is ignored, except by POST /local/history, which refuses (409) any value
+// that is not this device's own ID.
 const FromIDHeader = "X-Lanxfer-From-Id"
 
-// IDHeader carries the receiver's own device ID on every response.
+// IDHeader carries the receiver's own device ID on every response to an
+// allowed source address.
 const IDHeader = "X-Lanxfer-Id"
 
 // Recorder stores history entries. *history.Store satisfies it.
@@ -33,8 +35,10 @@ type Recorder interface {
 // Option configures optional parts of a Server.
 type Option func(*Server)
 
-// WithDeviceID makes the server send id in IDHeader on every response,
-// including rejections.
+// WithDeviceID makes the server send id in IDHeader on every response to an
+// allowed source address, including later rejections such as an Origin
+// refusal. It also makes POST /local/history accept only a caller that
+// names the same ID in FromIDHeader.
 func WithDeviceID(id string) Option {
 	return func(s *Server) { s.deviceID = id }
 }
@@ -90,8 +94,9 @@ func (s *Server) WaitUploads(ctx context.Context) error {
 
 // Handler returns the routed http.Handler. Every request passes through the
 // remote-address guard and the Origin guard before reaching the router. The
-// device ID header is set before the guards, so even a rejection tells the
-// caller who answered.
+// device ID header is set once the remote-address guard has passed, so an
+// address that is not allowed learns nothing, while the Origin rejection
+// that follows still tells the caller who answered.
 //
 // Browsers send an Origin header on cross-origin POST and PUT requests;
 // lanxfer's own clients never do. Rejecting any request that has one stops a
@@ -110,13 +115,13 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /local/peers", s.handleLocalPeers)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.deviceID != "" {
-			w.Header().Set(IDHeader, s.deviceID)
-		}
 		if !netguard.IsAllowedRemote(r.RemoteAddr) {
 			s.logger.Printf("rejected request from %s", r.RemoteAddr)
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
+		}
+		if s.deviceID != "" {
+			w.Header().Set(IDHeader, s.deviceID)
 		}
 		if _, ok := r.Header["Origin"]; ok { // present, even if empty
 			s.logger.Printf("rejected browser request from %s (Origin %q)", r.RemoteAddr, r.Header.Get("Origin"))

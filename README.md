@@ -132,8 +132,11 @@ When you send by name, the local `recv`'s list is used first:
 
 - An online peer is used as listed.
 - An offline peer is queried directly at its last address, and used only if
-  the same device answers there. Otherwise the send fails with
-  `<name> is offline (last seen ...)`.
+  the same device answers there. If not, for example because it got a new
+  address, a broadcast search looks for the same device ID (under any name),
+  or for the same name when the entry has no ID. A different device ID with
+  the same name is never used. If that finds nothing either, the send fails
+  with `<name> is offline (last seen ...)`.
 - If several online peers have the name, the send fails and lists their
   addresses; send to one of them by IP address.
 - A name that is not in the list, or no `recv` on this machine, falls back
@@ -143,13 +146,19 @@ So once a receiver has been seen, sending by name keeps working even while
 broadcasts do not get through.
 
 Sends and receipts are recorded in `history.jsonl`, one JSON object per line.
-`send` and `say` record every attempt, whether it succeeded, failed, or was
-cancelled. `recv` records the texts, files, and folders it received. A CLI
-command hands its entry to the `recv` on the same machine, and appends it to
-the file itself when there is none. If a send cannot be recorded, the command
-only prints a warning. If a received text cannot be recorded, the receiver
-refuses it with `500` and does not print it; a file or folder that is already
+`send` and `say` record every transfer they attempted, whether it succeeded,
+failed, or was cancelled. A failure before a target is chosen (an unknown
+name, a bad path or text) is not recorded. `recv` records the texts, files,
+and folders it received. A CLI command hands its entry to the `recv` on the
+same machine, and appends it to the file itself when there is none. Only a
+`recv` with the same device ID counts, so on a machine shared by several
+users, one user's commands do not use another user's `recv`. If a send
+cannot be recorded, the command only prints a warning. When a history is
+available but a received text cannot be written to it, the receiver refuses
+the text with `500` and does not print it; a file or folder that is already
 saved only produces a warning.
+If the config folder is unusable, there is no history at all: the receiver
+warns at startup, and texts are shown but not saved (and answered with `204`).
 
 The history, the peer list (`peers.json`), and the device ID (`device-id`)
 live in the config folder `lanxfer` inside the user config directory:
@@ -276,9 +285,10 @@ history; a missing or invalid one leaves just the IP address.
 
 `X-Lanxfer-From-Id` is also optional: the sender's device ID (32 lowercase
 hex characters), which the receiver records in the history. A missing or
-malformed one is ignored. Every response from a receiver, including an
-error, carries `X-Lanxfer-Id` with the receiver's own device ID, unless it
-has none. Older versions neither send nor read either header.
+malformed one is ignored. Every response from a receiver to an allowed source
+address, including an error, carries `X-Lanxfer-Id` with the receiver's own
+device ID, unless it has none. A `403` for a disallowed source address
+carries none. Older versions neither send nor read either header.
 
 Because it is plain HTTP, you can test a receiver with curl:
 
@@ -361,16 +371,24 @@ out when unknown:
 
     [{"id":"0123456789abcdef0123456789abcdef","name":"mac2","os":"darwin","addr":"192.168.1.20:8425","last_seen":"2026-10-20T21:40:12+09:00","online":true}]
 
+The CLI uses the list only if the response's `X-Lanxfer-Id` is its own device
+ID, and ignores entries with a disallowed address or an invalid name.
+
     POST /local/history
     Content-Type: application/json
+    X-Lanxfer-From-Id: <this machine's device ID>
 
     <one history entry>
 
 Appends a sent item reported by a CLI process, in the format of a line of
 `history.jsonl`, so that the receiver stays the only process writing the file.
-Only `"dir":"out"` entries are accepted. Responses: `204` recorded,
-`400` invalid entry, `413` too large, `415` wrong content type, `500` could
-not be recorded.
+Only `"dir":"out"` entries are accepted. `X-Lanxfer-From-Id` must match the
+receiver's own device ID, or the reply is `409` and nothing is recorded; this
+keeps one user's CLI out of another user's receiver on a shared machine. (The
+ID is also broadcast on the LAN, so this is not protection against a
+deliberate attacker.) Responses: `204` recorded, `400` invalid entry,
+`409` not this device's receiver, `413` too large, `415` wrong content type,
+`500` could not be recorded.
 
 ## Install
 

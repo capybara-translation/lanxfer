@@ -20,6 +20,7 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/history"
 	"github.com/capybara-translation/lanxfer/internal/presence"
+	"github.com/capybara-translation/lanxfer/internal/server"
 )
 
 const (
@@ -141,6 +142,25 @@ func (h *harness) stop() error {
 }
 
 func (h *harness) addr() string { return fmt.Sprintf("127.0.0.1:%d", h.cfg.Port) }
+
+// deviceID returns the node's device ID as the node itself reports it in the
+// X-Lanxfer-Id header. It must not be read with identity.LoadOrCreate: the
+// listener is open before the node creates its ID, so a test that creates the
+// ID too could end up with a different one.
+func (h *harness) deviceID() string {
+	h.t.Helper()
+	resp, err := http.Get("http://" + h.addr() + "/local/peers")
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	id := resp.Header.Get(server.IDHeader)
+	if id == "" {
+		h.t.Fatalf("no %s header in the response (status %d)", server.IDHeader, resp.StatusCode)
+	}
+	return id
+}
 
 func (h *harness) waitListening() {
 	h.t.Helper()
@@ -343,17 +363,33 @@ func TestRunProbesKnownPeers(t *testing.T) {
 	}
 }
 
-func TestRunReportsLocalHistory(t *testing.T) {
-	h := startNode(t, nil)
-	body := `{"dir":"out","kind":"text","text":"sent from cli","peer_name":"other","status":"ok"}`
-	resp, err := http.Post("http://"+h.addr()+"/local/history", "application/json", strings.NewReader(body))
+// postLocalHistory posts body to the node's POST /local/history as a CLI with
+// the given device ID would, and returns the status code.
+func postLocalHistory(t *testing.T, h *harness, fromID, body string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, "http://"+h.addr()+"/local/history", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if fromID != "" {
+		req.Header.Set(server.FromIDHeader, fromID)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	return resp.StatusCode
+}
+
+func TestRunReportsLocalHistory(t *testing.T) {
+	h := startNode(t, nil)
+	body := `{"dir":"out","kind":"text","text":"sent from cli","peer_name":"other","status":"ok"}`
+	selfID := h.deviceID()
+	if status := postLocalHistory(t, h, selfID, body); status != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", status)
 	}
 
 	e := h.waitEvent(func(e Event) bool { return e.Entry != nil })
@@ -366,6 +402,20 @@ func TestRunReportsLocalHistory(t *testing.T) {
 	}
 	if !entries[0].Time.Equal(e.Entry.Time) {
 		t.Errorf("event time %v differs from file time %v", e.Entry.Time, entries[0].Time)
+	}
+}
+
+func TestRunRefusesLocalHistoryOfAnotherDevice(t *testing.T) {
+	h := startNode(t, nil)
+	body := `{"dir":"out","kind":"text","text":"for another user","status":"ok"}`
+	for name, fromID := range map[string]string{"other ID": testID, "no ID": ""} {
+		if status := postLocalHistory(t, h, fromID, body); status != http.StatusConflict {
+			t.Errorf("%s: status = %d, want 409", name, status)
+		}
+	}
+	entries, err := history.ReadAll(filepath.Join(h.configDir, "history.jsonl"))
+	if err != nil || len(entries) != 0 {
+		t.Errorf("history = %v, %v; want nothing recorded", entries, err)
 	}
 }
 

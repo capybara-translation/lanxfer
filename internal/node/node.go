@@ -74,7 +74,8 @@ type Config struct {
 // down and returns nil. It returns an error if the HTTP port cannot be
 // opened. A missing config folder or a busy discovery port only produce
 // warnings: the node keeps receiving, without history, saved peers, or
-// discoverability respectively.
+// discoverability respectively. Without a history, a received text is shown
+// on Out but not saved, and is still answered with 204.
 func Run(ctx context.Context, cfg Config) error {
 	logger := cfg.Logger
 	if logger == nil {

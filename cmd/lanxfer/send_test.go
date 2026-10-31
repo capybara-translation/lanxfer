@@ -38,7 +38,7 @@ var (
 func TestResolveTargetIPLiteralSkipsDiscovery(t *testing.T) {
 	calls := stubDiscover(t, nil, errors.New("must not be called"))
 	localCalls := stubLocalPeers(t, nil, errors.New("must not be called"))
-	got, err := resolveTarget(context.Background(), "192.168.68.54", 8425)
+	got, err := resolveTarget(context.Background(), "192.168.68.54", 8425, idSelf)
 	if err != nil || got.ByName || got.Addr.String() != "192.168.68.54:8425" || got.ID != "" || got.Name != "" {
 		t.Errorf("got %+v, %v", got, err)
 	}
@@ -52,7 +52,7 @@ func TestResolveTargetIPLiteralSkipsDiscovery(t *testing.T) {
 
 func TestResolveTargetByNameIsCaseInsensitive(t *testing.T) {
 	stubDiscover(t, []discovery.Peer{mac2, ubuntu}, nil)
-	got, err := resolveTarget(context.Background(), "UBUNTU", 8425)
+	got, err := resolveTarget(context.Background(), "UBUNTU", 8425, idSelf)
 	if err != nil || !got.ByName {
 		t.Fatalf("got %+v, %v", got, err)
 	}
@@ -67,7 +67,7 @@ func TestResolveTargetByNameIsCaseInsensitive(t *testing.T) {
 
 func TestResolveTargetNoMatch(t *testing.T) {
 	stubDiscover(t, []discovery.Peer{mac2}, nil)
-	_, err := resolveTarget(context.Background(), "winbox", 8425)
+	_, err := resolveTarget(context.Background(), "winbox", 8425, idSelf)
 	if err == nil || !strings.Contains(err.Error(), `no peer named "winbox"`) {
 		t.Errorf("err = %v", err)
 	}
@@ -75,7 +75,7 @@ func TestResolveTargetNoMatch(t *testing.T) {
 
 func TestResolveTargetAmbiguousViaDiscovery(t *testing.T) {
 	stubDiscover(t, []discovery.Peer{mac2, mac2b}, nil)
-	_, err := resolveTarget(context.Background(), "mac2", 8425)
+	_, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
 	if err == nil || !strings.Contains(err.Error(), "192.168.68.54") || !strings.Contains(err.Error(), "192.168.68.77") {
 		t.Errorf("err = %v, want both candidates listed", err)
 	}
@@ -87,7 +87,7 @@ func TestResolveTargetAmbiguous(t *testing.T) {
 		onlinePeer("mac2", idMac2, "192.168.68.54:8425"),
 		onlinePeer("MAC2", idOther, "192.168.68.77:8425"),
 	}, nil)
-	_, err := resolveTarget(context.Background(), "mac2", 8425)
+	_, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
 	if !errors.Is(err, presence.ErrAmbiguous) {
 		t.Fatalf("err = %v, want ErrAmbiguous", err)
 	}
@@ -104,9 +104,10 @@ func TestResolveTargetUsesLocalPeers(t *testing.T) {
 	calls := stubDiscover(t, nil, errors.New("must not be called"))
 	queries := stubQueryAddr(t, nil, errors.New("must not be called"))
 	var gotPort int
+	var gotID string
 	orig := localPeersFunc
-	localPeersFunc = func(port int) ([]presence.Peer, error) {
-		gotPort = port
+	localPeersFunc = func(port int, selfID string) ([]presence.Peer, error) {
+		gotPort, gotID = port, selfID
 		return []presence.Peer{
 			onlinePeer("ubuntu", idUbuntu, "192.168.68.59:9000"),
 			onlinePeer("mac2", idMac2, "192.168.68.54:8425"),
@@ -114,7 +115,7 @@ func TestResolveTargetUsesLocalPeers(t *testing.T) {
 	}
 	t.Cleanup(func() { localPeersFunc = orig })
 
-	got, err := resolveTarget(context.Background(), "UBUNTU", 8500)
+	got, err := resolveTarget(context.Background(), "UBUNTU", 8500, idSelf)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +125,9 @@ func TestResolveTargetUsesLocalPeers(t *testing.T) {
 	}
 	if gotPort != 8500 {
 		t.Errorf("local API queried on port %d, want 8500", gotPort)
+	}
+	if gotID != idSelf {
+		t.Errorf("local API given ID %q, want %q", gotID, idSelf)
 	}
 	if *calls != 0 || len(*queries) != 0 {
 		t.Errorf("discovery %d times, unicast %d times; want none", *calls, len(*queries))
@@ -137,58 +141,131 @@ func TestResolveTargetVerifiesOfflinePeer(t *testing.T) {
 		p.Online, p.LastSeen = false, lastSeen
 		return p
 	}
+	newAddr := netip.MustParseAddrPort("192.168.68.99:8425")
 	tests := []struct {
-		name     string
-		peer     presence.Peer
-		replies  []discovery.Peer
-		queryErr error
-		wantAddr string // "" means an offline error is expected
-		wantName string // the target's name when verified
+		name          string
+		peer          presence.Peer
+		replies       []discovery.Peer // the unicast reply
+		queryErr      error
+		discovered    []discovery.Peer // the broadcast fallback
+		discoverErr   error
+		wantDiscovery bool   // the broadcast fallback is expected to run
+		wantAddr      string // "" means an offline error is expected
+		wantID        string
+		wantName      string // the target's name when found
 	}{
 		{
 			name:     "same ID, uses the reply's address",
 			peer:     offline(idMac2),
 			replies:  []discovery.Peer{{Name: "mac2-renamed", ID: idMac2, Addr: netip.MustParseAddrPort("192.168.68.54:9001")}},
-			wantAddr: "192.168.68.54:9001",
-			wantName: "mac2-renamed",
+			wantAddr: "192.168.68.54:9001", wantID: idMac2, wantName: "mac2-renamed",
 		},
-		{
-			name:    "different ID at the same address",
-			peer:    offline(idMac2),
-			replies: []discovery.Peer{{Name: "mac2", ID: idOther, Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
-		},
-		{
-			name:    "reply without ID does not match a peer with one",
-			peer:    offline(idMac2),
-			replies: []discovery.Peer{{Name: "mac2", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
-		},
-		{name: "no reply", peer: offline(idMac2)},
-		{name: "query fails", peer: offline(idMac2), queryErr: errors.New("network down")},
 		{
 			name:     "legacy peer matches by name, ignoring case",
 			peer:     offline(""),
 			replies:  []discovery.Peer{{Name: "MAC2", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
-			wantAddr: "192.168.68.54:8425",
-			wantName: "MAC2",
+			wantAddr: "192.168.68.54:8425", wantName: "MAC2",
 		},
 		{
-			name:    "legacy peer with another name",
-			peer:    offline(""),
-			replies: []discovery.Peer{{Name: "other", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
+			name:          "different ID at the same address, nobody else answers",
+			peer:          offline(idMac2),
+			replies:       []discovery.Peer{{Name: "mac2", ID: idOther, Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
+			wantDiscovery: true,
+		},
+		{
+			name:          "reply without ID does not match a peer with one",
+			peer:          offline(idMac2),
+			replies:       []discovery.Peer{{Name: "mac2", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
+			wantDiscovery: true,
+		},
+		{name: "no reply", peer: offline(idMac2), wantDiscovery: true},
+		{name: "query fails", peer: offline(idMac2), queryErr: errors.New("network down"), wantDiscovery: true},
+		{
+			name:          "legacy peer with another name",
+			peer:          offline(""),
+			replies:       []discovery.Peer{{Name: "other", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
+			wantDiscovery: true,
+		},
+		{
+			name:          "no reply, same ID found at a new address by broadcast",
+			peer:          offline(idMac2),
+			discovered:    []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: newAddr}},
+			wantDiscovery: true,
+			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2",
+		},
+		{
+			name:          "no reply, same ID found under a new name by broadcast",
+			peer:          offline(idMac2),
+			discovered:    []discovery.Peer{mac2b, {Name: "mac2-renamed", ID: idMac2, Addr: newAddr}},
+			wantDiscovery: true,
+			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2-renamed",
+		},
+		{
+			name:          "mismatching reply, same ID found elsewhere by broadcast",
+			peer:          offline(idMac2),
+			replies:       []discovery.Peer{{Name: "mac2", ID: idOther, Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
+			discovered:    []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: newAddr}},
+			wantDiscovery: true,
+			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2",
+		},
+		{
+			name:          "query fails, same ID found by broadcast",
+			peer:          offline(idMac2),
+			queryErr:      errors.New("network down"),
+			discovered:    []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: newAddr}},
+			wantDiscovery: true,
+			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2",
+		},
+		{
+			name:          "broadcast finds only another ID with the same name",
+			peer:          offline(idMac2),
+			discovered:    []discovery.Peer{{Name: "mac2", ID: idOther, Addr: newAddr}, mac2b},
+			wantDiscovery: true,
+		},
+		{
+			name:          "legacy peer found by name by broadcast",
+			peer:          offline(""),
+			discovered:    []discovery.Peer{ubuntu, {Name: "MAC2", Addr: newAddr}},
+			wantDiscovery: true,
+			wantAddr:      newAddr.String(), wantName: "MAC2",
+		},
+		{
+			name:          "legacy peer found by broadcast with an ID takes it",
+			peer:          offline(""),
+			discovered:    []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: newAddr}},
+			wantDiscovery: true,
+			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2",
+		},
+		{
+			name:          "broadcast fails",
+			peer:          offline(idMac2),
+			discoverErr:   discovery.ErrNoNetwork,
+			wantDiscovery: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			calls := stubDiscover(t, nil, errors.New("must not be called"))
+			var discoverPort int
+			discoverCalls := 0
+			orig := discoverFunc
+			discoverFunc = func(_ context.Context, port int, _ time.Duration) ([]discovery.Peer, error) {
+				discoverCalls++
+				discoverPort = port
+				return tt.discovered, tt.discoverErr
+			}
+			t.Cleanup(func() { discoverFunc = orig })
 			stubLocalPeers(t, []presence.Peer{tt.peer}, nil)
 			queries := stubQueryAddr(t, tt.replies, tt.queryErr)
 
-			got, err := resolveTarget(context.Background(), "mac2", 8425)
+			got, err := resolveTarget(context.Background(), "mac2", 8500, idSelf)
 			if len(*queries) != 1 || (*queries)[0] != tt.peer.Addr {
 				t.Errorf("queried %v, want exactly the stored address %s", *queries, tt.peer.Addr)
 			}
-			if *calls != 0 {
-				t.Errorf("fell back to broadcast discovery %d times", *calls)
+			if (discoverCalls == 1) != tt.wantDiscovery || discoverCalls > 1 {
+				t.Errorf("broadcast discovery ran %d times, want it used = %v", discoverCalls, tt.wantDiscovery)
+			}
+			if discoverCalls == 1 && discoverPort != 8500 {
+				t.Errorf("discovery on port %d, want 8500", discoverPort)
 			}
 			if tt.wantAddr == "" {
 				want := "mac2 is offline (last seen " + lastSeen.Local().Format("2006-01-02 15:04") + ")"
@@ -200,11 +277,83 @@ func TestResolveTargetVerifiesOfflinePeer(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Addr.String() != tt.wantAddr || !got.ByName || got.ID != tt.peer.ID || got.Name != tt.wantName {
-				t.Errorf("got %+v, want addr %s", got, tt.wantAddr)
+			if got.Addr.String() != tt.wantAddr || !got.ByName || got.ID != tt.wantID || got.Name != tt.wantName {
+				t.Errorf("got %+v, want addr %s, ID %q, name %q", got, tt.wantAddr, tt.wantID, tt.wantName)
 			}
 		})
 	}
+}
+
+func TestResolveTargetOfflineSameIDOnSeveralInterfacesUsesFirst(t *testing.T) {
+	p := onlinePeer("mac2", idMac2, "192.168.68.54:8425")
+	p.Online = false
+	stubLocalPeers(t, []presence.Peer{p}, nil)
+	first := netip.MustParseAddrPort("192.168.68.60:8425")
+	stubDiscover(t, []discovery.Peer{
+		{Name: "mac2", ID: idMac2, Addr: first},
+		{Name: "mac2", ID: idMac2, Addr: netip.MustParseAddrPort("10.0.0.5:8425")},
+	}, nil)
+	got, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Addr != first || got.ID != idMac2 {
+		t.Errorf("got %+v, want the first reply %s", got, first)
+	}
+}
+
+func TestResolveTargetOfflineLegacyPeerAmbiguousViaDiscovery(t *testing.T) {
+	p := onlinePeer("mac2", "", "192.168.68.54:8425")
+	p.Online = false
+	stubLocalPeers(t, []presence.Peer{p}, nil)
+	stubDiscover(t, []discovery.Peer{
+		{Name: "mac2", Addr: netip.MustParseAddrPort("192.168.68.60:8425")},
+		{Name: "MAC2", Addr: netip.MustParseAddrPort("192.168.68.61:8425")},
+	}, nil)
+	_, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
+	want := `multiple peers named "mac2" (192.168.68.60, 192.168.68.61); specify an IP address`
+	if err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}
+
+func TestResolveTargetOfflineCancelledStaysCancelled(t *testing.T) {
+	p := onlinePeer("mac2", idMac2, "192.168.68.54:8425")
+	p.Online = false
+	stubLocalPeers(t, []presence.Peer{p}, nil)
+
+	t.Run("during the unicast check", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		orig := queryAddrFunc
+		queryAddrFunc = func(context.Context, netip.AddrPort, time.Duration) ([]discovery.Peer, error) {
+			cancel()
+			return nil, ctx.Err()
+		}
+		t.Cleanup(func() { queryAddrFunc = orig })
+		calls := stubDiscover(t, nil, errors.New("must not be called"))
+		_, err := resolveTarget(ctx, "mac2", 8425, idSelf)
+		if !errors.Is(interrupted(ctx, err), errCancelled) {
+			t.Errorf("err = %v, want it reported as a cancellation", err)
+		}
+		if *calls != 0 {
+			t.Errorf("broadcast discovery ran %d times after cancellation", *calls)
+		}
+	})
+
+	t.Run("during the broadcast", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		stubQueryAddr(t, nil, nil)
+		orig := discoverFunc
+		discoverFunc = func(context.Context, int, time.Duration) ([]discovery.Peer, error) {
+			cancel()
+			return nil, ctx.Err()
+		}
+		t.Cleanup(func() { discoverFunc = orig })
+		_, err := resolveTarget(ctx, "mac2", 8425, idSelf)
+		if !errors.Is(interrupted(ctx, err), errCancelled) {
+			t.Errorf("err = %v, want it reported as a cancellation", err)
+		}
+	})
 }
 
 func TestResolveTargetFallsBackWhenNoLocalReceiver(t *testing.T) {
@@ -222,7 +371,7 @@ func TestResolveTargetFallsBackWhenNoLocalReceiver(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			stubLocalPeers(t, tt.peers, tt.err)
 			calls := stubDiscover(t, []discovery.Peer{mac2}, nil)
-			got, err := resolveTarget(context.Background(), "mac2", 8425)
+			got, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -238,13 +387,13 @@ func TestResolveTargetFallsBackWhenNoLocalReceiver(t *testing.T) {
 
 func TestResolveTargetDiscoveryError(t *testing.T) {
 	stubDiscover(t, nil, discovery.ErrNoNetwork)
-	if _, err := resolveTarget(context.Background(), "mac2", 8425); !errors.Is(err, discovery.ErrNoNetwork) {
+	if _, err := resolveTarget(context.Background(), "mac2", 8425, idSelf); !errors.Is(err, discovery.ErrNoNetwork) {
 		t.Errorf("err = %v, want ErrNoNetwork", err)
 	}
 }
 
 func TestResolveTargetBadPort(t *testing.T) {
-	if _, err := resolveTarget(context.Background(), "192.168.68.54", 70000); !errors.Is(err, errUsage) {
+	if _, err := resolveTarget(context.Background(), "192.168.68.54", 70000, idSelf); !errors.Is(err, errUsage) {
 		t.Errorf("err = %v, want errUsage", err)
 	}
 }

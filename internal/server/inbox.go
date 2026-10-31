@@ -22,7 +22,8 @@ type Inbox struct {
 }
 
 // NewInbox returns an Inbox that records to rec and prints to out. A nil rec
-// skips recording and only prints.
+// means there is no history (for example the config folder is unusable):
+// texts are then shown but not saved.
 func NewInbox(rec Recorder, out io.Writer) *Inbox {
 	return &Inbox{rec: rec, out: out, now: time.Now}
 }
@@ -37,8 +38,8 @@ func (in *Inbox) Deliver(from, fromID string, addr netip.Addr, text string) erro
 	in.mu.Lock()
 	defer in.mu.Unlock()
 
-	// Record first so a message is never shown without being saved; on
-	// failure the sender gets an error and nothing is printed.
+	// With a history, record first so a message is never shown without being
+	// saved; on failure the sender gets an error and nothing is printed.
 	if in.rec != nil {
 		err := in.rec.Append(history.Entry{
 			Time: now, Dir: history.In, Kind: history.KindText, Text: text,
