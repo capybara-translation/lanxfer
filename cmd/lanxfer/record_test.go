@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/history"
 	"github.com/capybara-translation/lanxfer/internal/identity"
-	"github.com/capybara-translation/lanxfer/internal/target"
 )
 
 func sampleEntry() history.Entry {
@@ -165,48 +163,4 @@ func TestDeviceIDWarnsWhenConfigDirUnknown(t *testing.T) {
 	if got := warn.String(); got != "warning: no device ID: no home\n" {
 		t.Errorf("warning = %q", got)
 	}
-}
-
-func TestSendEntry(t *testing.T) {
-	tg := sendTarget{Target: target.Target{Addr: mac2.Addr, ID: idMac2, Name: "mac2"}, ByName: true}
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	t.Run("file ok", func(t *testing.T) {
-		res := &client.Result{RemoteName: "a (1).txt", PeerID: idUbuntu}
-		e := sendEntry(context.Background(), tg, "/src/a.txt", "a.txt", 12, nil, res, nil)
-		want := history.Entry{
-			Dir: history.Out, PeerID: idUbuntu, PeerName: "mac2", PeerAddr: "192.168.68.54",
-			Kind: history.KindFile, Name: "a.txt", SavedAs: "a (1).txt", Path: "/src/a.txt",
-			Size: 12, Status: history.StatusOK,
-		}
-		if e != want {
-			t.Errorf("got  %+v\nwant %+v", e, want)
-		}
-	})
-	t.Run("response without ID uses the resolved one", func(t *testing.T) {
-		res := &client.Result{RemoteName: "a.txt"}
-		e := sendEntry(context.Background(), tg, "/src/a.txt", "a.txt", 12, nil, res, nil)
-		if e.PeerID != idMac2 {
-			t.Errorf("PeerID = %q, want %q", e.PeerID, idMac2)
-		}
-	})
-	t.Run("folder cancelled", func(t *testing.T) {
-		plan := &client.DirPlan{Name: "trip", Files: 3, ContentSize: 300}
-		e := sendEntry(cancelled, tg, "/src/trip", "trip", 0, plan, nil, errors.New("context canceled"))
-		want := history.Entry{
-			Dir: history.Out, PeerID: idMac2, PeerName: "mac2", PeerAddr: "192.168.68.54",
-			Kind: history.KindFolder, Name: "trip", Path: "/src/trip", Size: 300, Files: 3,
-			Status: history.StatusCancelled, Error: "context canceled",
-		}
-		if e != want {
-			t.Errorf("got  %+v\nwant %+v", e, want)
-		}
-	})
-	t.Run("failed", func(t *testing.T) {
-		e := sendEntry(context.Background(), tg, "/src/a.txt", "a.txt", 12, nil, nil, errors.New("connection refused"))
-		if e.Status != history.StatusFailed || e.Error != "connection refused" || e.SavedAs != "" {
-			t.Errorf("got %+v", e)
-		}
-	})
 }

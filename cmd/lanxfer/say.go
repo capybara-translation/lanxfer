@@ -16,6 +16,7 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/humanize"
 	"github.com/capybara-translation/lanxfer/internal/peername"
 	"github.com/capybara-translation/lanxfer/internal/server"
+	"github.com/capybara-translation/lanxfer/internal/transfer"
 )
 
 func runSay(args []string) error {
@@ -54,7 +55,7 @@ func runSay(args []string) error {
 	}
 	opts := client.SendOptions{From: from, FromID: selfID}
 	res, err := client.Say(ctx, tg.Addr.Addr().String(), int(tg.Addr.Port()), text, opts)
-	recordSent(*port, selfID, textEntry(ctx, tg, text, res, err), os.Stderr)
+	recordSent(*port, selfID, transfer.TextEntry(ctx, tg.Target, text, res, err), os.Stderr)
 	if err != nil {
 		return interrupted(ctx, err)
 	}

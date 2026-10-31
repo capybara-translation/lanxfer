@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -60,63 +59,6 @@ func appendHistory(e history.Entry) error {
 		return err
 	}
 	return history.Open(filepath.Join(dir, "history.jsonl")).Append(e)
-}
-
-// sendEntry describes one finished (or failed) send for the history. path is
-// the source path to store and name the name that was sent; size is the file
-// size, which a folder plan overrides with its content size. res may be nil
-// when the transfer failed. ctx tells a cancellation from a failure.
-func sendEntry(ctx context.Context, tg sendTarget, path, name string, size int64, plan *client.DirPlan, res *client.Result, err error) history.Entry {
-	e := history.Entry{
-		Dir:      history.Out,
-		PeerID:   tg.ID,
-		PeerName: tg.Name,
-		PeerAddr: tg.Addr.Addr().String(),
-		Kind:     history.KindFile,
-		Name:     name,
-		Path:     path,
-		Size:     size,
-	}
-	if plan != nil {
-		e.Kind, e.Name, e.Size, e.Files = history.KindFolder, plan.Name, plan.ContentSize, plan.Files
-	}
-	fillOutcome(ctx, &e, res, err)
-	return e
-}
-
-// textEntry describes one sent message for the history. ctx tells a
-// cancellation from a failure.
-func textEntry(ctx context.Context, tg sendTarget, text string, res *client.Result, err error) history.Entry {
-	e := history.Entry{
-		Dir:      history.Out,
-		PeerID:   tg.ID,
-		PeerName: tg.Name,
-		PeerAddr: tg.Addr.Addr().String(),
-		Kind:     history.KindText,
-		Text:     text,
-	}
-	fillOutcome(ctx, &e, res, err)
-	return e
-}
-
-// fillOutcome sets the result fields of e. The receiver's own ID, when its
-// response carried one, wins over the one found while resolving the target,
-// because it names the machine that actually answered.
-func fillOutcome(ctx context.Context, e *history.Entry, res *client.Result, err error) {
-	if res != nil && res.PeerID != "" {
-		e.PeerID = res.PeerID
-	}
-	switch {
-	case err == nil:
-		e.Status = history.StatusOK
-		if res != nil {
-			e.SavedAs = res.RemoteName
-		}
-	case errors.Is(interrupted(ctx, err), errCancelled):
-		e.Status, e.Error = history.StatusCancelled, err.Error()
-	default:
-		e.Status, e.Error = history.StatusFailed, err.Error()
-	}
 }
 
 // absPath returns path as an absolute path, or path itself when it cannot be

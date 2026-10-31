@@ -21,6 +21,7 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/peername"
 	"github.com/capybara-translation/lanxfer/internal/presence"
 	"github.com/capybara-translation/lanxfer/internal/target"
+	"github.com/capybara-translation/lanxfer/internal/transfer"
 )
 
 // These are variables so tests can resolve names without a network or a
@@ -100,7 +101,7 @@ func runSend(args []string) error {
 		res, err = client.Send(ctx, host, hostPort, path, opts)
 	}
 	stopProgress() // erase the line before the result or the error is printed
-	recordSent(*port, selfID, sendEntry(ctx, tg, absPath(path), name, info.Size(), plan, res, err), os.Stderr)
+	recordSent(*port, selfID, transfer.Entry(ctx, tg.Target, absPath(path), name, info.Size(), plan, res, err), os.Stderr)
 	if err != nil {
 		return interrupted(ctx, err)
 	}
