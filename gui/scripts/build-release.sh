@@ -8,8 +8,8 @@
 #   windows  lanxfer-app_windows_amd64.zip      (cross-compiles on any host)
 #   linux    lanxfer-app_linux_amd64.tar.gz     (run on Linux)
 #
-# <tag> is stamped into the build (see stamp-version.sh); CI checks pass a
-# dummy such as v0.0.0. The tracked files are not modified. The release
+# <tag> is stamped into the build (see stamp-version.sh); CI checks pass the
+# dummy v9.9.9. The tracked files are not modified. The release
 # workflow and the check workflow both call this script, so they cannot
 # drift apart. Needs Go, Node.js and wails3 on the PATH.
 set -euo pipefail

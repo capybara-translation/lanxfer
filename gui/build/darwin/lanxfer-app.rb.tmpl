@@ -24,5 +24,9 @@ cask "lanxfer-app" do
     run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/lanxfer.app"]
   end
 
+  # The app keeps running with its window closed and a second launch only
+  # raises it, so without this the old version would outlive an upgrade.
+  uninstall quit: "com.capybara-translation.lanxfer"
+
   # No zap stanza: the history under the config folder is kept on purpose.
 end

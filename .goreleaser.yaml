@@ -29,6 +29,10 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+git:
+  # Sort v1.2.3 ahead of v1.2.3-rc.1 when both tags are on the same commit.
+  prerelease_suffix: "-"
+
 release:
   # A tag with a suffix such as v1.2.3-rc.1 is published as a prerelease.
   prerelease: auto

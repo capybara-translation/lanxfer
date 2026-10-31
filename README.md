@@ -53,6 +53,10 @@ To upgrade to the latest release:
 
     brew upgrade --cask capybara-translation/tap/lanxfer-app
 
+The upgrade quits the running app, which cancels any transfer in progress.
+Add `--no-quit` to leave it running; the new version then starts the next
+time you quit the app and open it again.
+
 Or download a file from the
 [Releases page](https://github.com/capybara-translation/lanxfer/releases).
 `lanxfer-app_checksums.txt` on the same page lists their SHA-256.

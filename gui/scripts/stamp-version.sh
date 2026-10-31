@@ -41,7 +41,7 @@ sed -E \
   "$root/build/windows/info.json" >"$outdir/info.json"
 
 # Fail loudly if the stamp did not land, for example after a template change.
-grep -q "<string>$version</string>" "$outdir/Info.plist"
+[ "$(grep -c "<string>$version</string>" "$outdir/Info.plist")" -eq 2 ]
 grep -q "\"file_version\": \"$file_version\"" "$outdir/info.json"
 grep -q "\"ProductVersion\": \"$version\"" "$outdir/info.json"
 

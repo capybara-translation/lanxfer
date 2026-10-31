@@ -54,8 +54,9 @@ jobs:
   # cover it. macOS is a supported platform and runs the frontend checks too.
   # Each job ends by running gui/scripts/build-release.sh, the script the
   # release workflow uses, with a dummy tag, so a change that breaks the
-  # release build is caught here and not on the day of a release. Nothing is
-  # uploaded.
+  # release build is caught here and not on the day of a release. The tag
+  # differs from the placeholders in the tracked files, so the checks in
+  # stamp-version.sh fail if the version did not land. Nothing is uploaded.
   gui-macos:
     runs-on: macos-latest
     steps:
@@ -98,7 +99,20 @@ jobs:
         working-directory: gui
 
       - name: Build the release app
-        run: gui/scripts/build-release.sh macos v0.0.0 "$RUNNER_TEMP/dist"
+        run: gui/scripts/build-release.sh macos v9.9.9 "$RUNNER_TEMP/dist"
+
+      # The tap only receives a final tag, so a broken cask would otherwise
+      # surface on release day. brew style reports a file outside a Casks
+      # directory, and it misses an unknown stanza, which loading the cask
+      # catches.
+      - name: Check the cask
+        run: |
+          sha256=$(shasum -a 256 "$RUNNER_TEMP/dist/lanxfer-app_darwin_universal.zip" | cut -d' ' -f1)
+          cask="$RUNNER_TEMP/tap/Casks/lanxfer-app.rb"
+          mkdir -p "$(dirname "$cask")"
+          gui/scripts/render-cask.sh v9.9.9 "$sha256" "$cask"
+          brew style "$cask"
+          brew ruby -e 'Cask::CaskLoader::FromContentLoader.new(File.read(ARGV.first)).load(config: nil)' "$cask"
 
   # Linux is not tested by hand; this job is the only thing that compiles it.
   gui-ubuntu:
@@ -137,5 +151,5 @@ jobs:
 
       - name: Build the release apps
         run: |
-          gui/scripts/build-release.sh windows v0.0.0 "$RUNNER_TEMP/dist"
-          gui/scripts/build-release.sh linux v0.0.0 "$RUNNER_TEMP/dist"
+          gui/scripts/build-release.sh windows v9.9.9 "$RUNNER_TEMP/dist"
+          gui/scripts/build-release.sh linux v9.9.9 "$RUNNER_TEMP/dist"

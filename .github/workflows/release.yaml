@@ -19,10 +19,29 @@ jobs:
 
       - run: go test -race ./...
 
+  # gui/ is a separate Go module, which the job above does not reach. A failure
+  # here stops the CLI release as well: a tag whose app is broken is not
+  # published at all.
+  gui-test:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          check-latest: true
+          cache-dependency-path: gui/go.sum
+
+      - run: go test ./...
+        working-directory: gui
+
   # Runs only after the tests pass, so a broken tag is never published.
   # Kept in its own job so the tests never run with a write-capable token.
   release:
-    needs: test
+    needs: [test, gui-test]
     runs-on: ubuntu-latest
     permissions:
       # Create the GitHub Release. The Homebrew tap lives in another repository,
@@ -39,6 +58,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Left to itself, goreleaser would treat a prerelease as the previous
+      # release, and the changelog of v1.2.3 would start at v1.2.3-rc.1.
+      - name: Find the previous release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          previous=$(git describe --tags --abbrev=0 --exclude='*-*' "$TAG^")
+          echo "GORELEASER_PREVIOUS_TAG=$previous" >>"$GITHUB_ENV"
+
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
@@ -46,6 +74,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # A commit can carry both v1.2.3-rc.1 and v1.2.3; release the tag
+          # that started this run.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
 
   # The desktop app (gui/) is built and attached after the CLI release exists.
   # If one of these jobs fails, the CLI release stays published: use "Re-run
@@ -158,7 +189,7 @@ jobs:
 
       # A prerelease tag (v1.2.3-rc.1) is uploaded as well: goreleaser marks
       # its release as a prerelease, so it is not "latest" for GitHub, and
-      # gui-tap below leaves Homebrew alone.
+      # gui-tap below does not push it to Homebrew.
       - name: Upload to the release
         working-directory: assets
         env:
@@ -167,13 +198,14 @@ jobs:
         # --clobber replaces files from an earlier run of this workflow.
         run: gh release upload "$TAG" lanxfer-app_* --clobber --repo "$GITHUB_REPOSITORY"
 
-  # Updates the cask in the Homebrew tap. Skipped for a prerelease tag; the
-  # CLI cask is skipped for the same tags by skip_upload: auto in
-  # .goreleaser.yaml. Do not re-run this job for an older tag: it would
-  # replace the current cask with that version.
+  # Renders the cask from the published file and updates the Homebrew tap. A
+  # prerelease tag stops before the push, as the CLI cask does through
+  # skip_upload: auto in .goreleaser.yaml, so a rehearsal runs everything else:
+  # its cask is kept as a workflow artifact, to install from a local tap. Do
+  # not re-run this job for an older tag: it would replace the current cask
+  # with that version.
   gui-tap:
     needs: gui-upload
-    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -190,8 +222,15 @@ jobs:
           sha256=$(sha256sum "$RUNNER_TEMP/app.zip" | cut -d' ' -f1)
           gui/scripts/render-cask.sh "$TAG" "$sha256" "$RUNNER_TEMP/lanxfer-app.rb"
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cask
+          path: ${{ runner.temp }}/lanxfer-app.rb
+          if-no-files-found: error
+
       # The only step that sees the tap token.
       - name: Push the cask to the tap
+        if: ${{ !contains(github.ref_name, '-') }}
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAG: ${{ github.ref_name }}

@@ -3,7 +3,9 @@
 #
 # Fills build/darwin/lanxfer-app.rb.tmpl with the release version (a leading
 # "v" is dropped) and the SHA-256 of lanxfer-app_darwin_universal.zip, and
-# writes the Homebrew cask to <output-path>.
+# writes the Homebrew cask to <output-path>. A prerelease suffix is accepted so
+# that a rehearsal can install its cask; keeping it out of the tap is up to
+# the push step of the release workflow.
 set -euo pipefail
 
 if [ "$#" -ne 3 ]; then
@@ -15,8 +17,9 @@ version=${1#v}
 sha256=$2
 output=$3
 
-if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "render-cask: unexpected version '$1' (a release version has no suffix)" >&2
+# X.Y.Z with an optional prerelease suffix, as in stamp-version.sh.
+if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "render-cask: unexpected version '$1'" >&2
   exit 1
 fi
 if ! [[ $sha256 =~ ^[0-9a-f]{64}$ ]]; then
