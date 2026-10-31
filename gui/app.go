@@ -28,8 +28,11 @@ const (
 // NodeState says whether the receiver is running. Error explains why it is
 // not, and is empty after a plain Stop.
 type NodeState struct {
-	Running bool   `json:"running"`
-	Error   string `json:"error"`
+	// Starting is true until the first start has finished, so the page can
+	// tell "not yet" from "failed".
+	Starting bool   `json:"starting"`
+	Running  bool   `json:"running"`
+	Error    string `json:"error"`
 }
 
 // appConfig is what App needs from its surroundings; tests replace it.
@@ -46,8 +49,8 @@ type appConfig struct {
 	OnState func(NodeState)
 }
 
-// App owns the receiving process. Its exported methods are called from the
-// frontend and from the tray, so any goroutine may call them.
+// App owns the receiving process. Its methods are called from the Service and
+// from the tray, so any goroutine may call them.
 type App struct {
 	cfg appConfig
 
@@ -75,7 +78,7 @@ func NewApp(cfg appConfig) *App {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(io.Discard, "", 0)
 	}
-	a := &App{cfg: cfg}
+	a := &App{cfg: cfg, state: NodeState{Starting: true}}
 	if cfg.ConfigDir != "" {
 		a.direct = history.Open(filepath.Join(cfg.ConfigDir, historyFileName))
 	}

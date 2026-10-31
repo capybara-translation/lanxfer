@@ -60,7 +60,6 @@ func main() {
 		Port:      portFromEnv(logger),
 		Logger:    logger,
 		Emitter:   wailsEmitter{app: func() *application.App { return app }},
-		Reveal:    func(path string) error { return app.Env.OpenFileManager(path, true) },
 	})
 
 	var win *application.WebviewWindow
@@ -113,7 +112,7 @@ func main() {
 	// Dropped files go to the chat that is open.
 	win.OnWindowEvent(events.Common.WindowFilesDropped, svc.handleFilesDropped)
 
-	newTray(app, win, svc.app.SaveDir)
+	newTray(app, win, svc.saveDir)
 
 	// The service loads the history and starts the receiver in ServiceStartup.
 	if err := app.Run(); err != nil {

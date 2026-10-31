@@ -39,7 +39,8 @@ type serviceConfig struct {
 	Port      int
 	Logger    *log.Logger
 	Emitter   emitter
-	// Reveal shows a file in the file manager; nil reports an error.
+	// Reveal shows an item in the file manager without opening it; nil uses
+	// the real one.
 	Reveal func(path string) error
 	// Locate resolves a peer to an address; nil uses the real discovery.
 	Locate func(ctx context.Context, p presence.Peer, port int) (target.Target, error)
@@ -104,7 +105,7 @@ func newService(cfg serviceConfig) *Service {
 		cfg.Emitter = discardEmitter{}
 	}
 	if cfg.Reveal == nil {
-		cfg.Reveal = func(string) error { return errors.New("cannot open the file manager") }
+		cfg.Reveal = revealPath
 	}
 	if cfg.Locate == nil {
 		cfg.Locate = target.Finder{}.Locate
@@ -167,7 +168,32 @@ func (s *Service) startup() {
 		return
 	}
 	s.app.Start()
+	s.afterStartLocked()
+}
+
+// afterStartLocked finishes a start: it gives the chats the saved peer list
+// when no receiver runs to report it, and installs the manager. The caller
+// holds lifeMu.
+func (s *Service) afterStartLocked() {
+	if !s.app.State().Running {
+		s.loadSavedPeers()
+	}
 	s.installManagerLocked()
+}
+
+// loadSavedPeers pushes the saved peer list as a peers event. Without a
+// receiver nothing else reports peers, and a send needs one. Everyone in it is
+// offline, which the sender handles by looking the peer up. The file is only
+// read.
+func (s *Service) loadSavedPeers() {
+	if s.cfg.ConfigDir == "" {
+		return
+	}
+	reg := presence.NewRegistry(filepath.Join(s.cfg.ConfigDir, "peers.json"))
+	if err := reg.Load(); err != nil {
+		s.cfg.Logger.Printf("warning: could not load saved peers: %v", err)
+	}
+	s.queue.push(work{kind: workNode, node: node.Event{Peers: reg.Peers()}})
 }
 
 func (s *Service) historyPath() string {
@@ -303,6 +329,21 @@ func (s *Service) quit() {
 	})
 }
 
+// probeFolder checks that dir exists, or can be created, and that a file can
+// be created in it.
+func probeFolder(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("the save folder cannot be used: %w", err)
+	}
+	f, err := os.CreateTemp(dir, ".lanxfer-probe-*")
+	if err != nil {
+		return fmt.Errorf("the save folder cannot be written to: %w", err)
+	}
+	f.Close()
+	os.Remove(f.Name())
+	return nil
+}
+
 // bounded runs fn and gives up waiting after d.
 func (s *Service) bounded(what string, d time.Duration, fn func()) {
 	done := make(chan struct{})
@@ -337,8 +378,9 @@ func (s *Service) peerFor(key string) (presence.Peer, error) {
 	return p, nil
 }
 
-// drop sends dropped files to the open chat. It is not exported: only the
-// window's drop event may start a send of local files.
+// drop sends dropped files to the open chat. It is not exported, so the page
+// cannot call it by name. That is no security boundary: in Wails v3.0.0 the
+// dropped paths come back through the page, so the page can report any path.
 func (s *Service) drop(paths []string) {
 	if len(paths) == 0 {
 		return
@@ -361,7 +403,20 @@ func (s *Service) drop(paths []string) {
 		ignore(err.Error())
 		return
 	}
-	m.SendPaths(key, p, paths)
+	if m.SendPaths(key, p, paths) == nil {
+		// The manager was closed after manager() returned: settings are being
+		// applied.
+		ignore("lanxfer is applying settings; drop the files again in a moment.")
+	}
+}
+
+// saveDir is the folder that receives files: the one the receiver started
+// with, or the saved setting before the first start.
+func (s *Service) saveDir() string {
+	if dir := s.app.SaveDir(); dir != "" {
+		return dir
+	}
+	return s.app.loadSettings().SaveDir
 }
 
 // State reports whether the receiver is running.
@@ -453,6 +508,9 @@ func (s *Service) Retry() {
 	defer s.lifeMu.Unlock()
 	if !s.closed {
 		s.app.Start()
+		if !s.app.State().Running {
+			s.loadSavedPeers()
+		}
 	}
 }
 
@@ -479,6 +537,10 @@ func (s *Service) SaveSettings(v Settings) error {
 	default:
 		return errors.New("lanxfer is still starting; try again in a moment")
 	}
+	// Refuse a folder the receiver could not use, so the old settings stay.
+	if err := probeFolder(v.SaveDir); err != nil {
+		return err
+	}
 
 	s.lifeMu.Lock()
 	defer s.lifeMu.Unlock()
@@ -495,9 +557,9 @@ func (s *Service) SaveSettings(v Settings) error {
 	s.mgr = nil
 	s.mu.Unlock()
 	if old != nil {
-		old.Close()
+		s.bounded("closing the transfers", closeTransfersWait, old.Close)
 	}
 	s.app.Restart()
-	s.installManagerLocked()
+	s.afterStartLocked()
 	return nil
 }

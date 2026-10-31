@@ -2,7 +2,6 @@ package main
 
 import (
 	_ "embed"
-	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -31,13 +30,8 @@ func newTray(app *application.App, win *application.WebviewWindow, saveDir func(
 		if dir == "" {
 			return
 		}
-		// The receiver creates the folder when it starts; do the same here so
-		// that the menu works before the first receipt, and when it is not running.
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			app.Logger.Error("cannot create the save folder", "error", err)
-			return
-		}
-		if err := app.Env.OpenFileManager(dir, false); err != nil {
+		// Not app.Env.OpenFileManager: it expands "$" in the path.
+		if err := openFolder(dir); err != nil {
 			app.Logger.Error("cannot open the save folder", "error", err)
 		}
 	})

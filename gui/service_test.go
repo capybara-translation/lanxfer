@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -495,5 +498,113 @@ func TestQuitBeforeStart(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("quit waited for a drain goroutine that never started")
+	}
+}
+
+func TestSendWithoutNodeUsesSavedPeers(t *testing.T) {
+	port := busyPort(t) // the receiver cannot start, so it never reports peers
+	fakeHome(t)
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal([]presence.Peer{testPeer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "peers.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	em := &fakeEmitter{}
+	s := newService(serviceConfig{
+		ConfigDir: cfgDir,
+		Port:      port,
+		Emitter:   em,
+		Locate: func(context.Context, presence.Peer, int) (target.Target, error) {
+			return target.Target{}, errors.New("unreachable in tests")
+		},
+	})
+	t.Cleanup(s.quit)
+	s.start()
+	<-s.ready
+	if s.State().Running {
+		t.Fatal("the receiver runs on a busy port")
+	}
+	barrier(t, s, em)
+
+	// No store.SetPeers here: the peer came from the saved list.
+	err = s.SendText(testPeerKey, "hello")
+	if err == nil || !strings.Contains(err.Error(), "unreachable in tests") {
+		t.Fatalf("SendText = %v, want the lookup failure, not a missing peer", err)
+	}
+	barrier(t, s, em)
+	if n := len(em.messages()); n != 1 {
+		t.Fatalf("message events = %d, want 1", n)
+	}
+	if n := historyLines(t, cfgDir); n != 1 {
+		t.Fatalf("history lines = %d, want 1", n)
+	}
+}
+
+func TestSaveSettingsRejectsUnusableFolder(t *testing.T) {
+	s, _, _ := newTestService(t, svcOpts{})
+	before := s.Settings()
+
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := []string{file, filepath.Join(file, "sub")}
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		ro := filepath.Join(t.TempDir(), "ro")
+		if err := os.Mkdir(ro, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		bad = append(bad, ro, filepath.Join(ro, "sub"))
+	}
+	for _, dir := range bad {
+		if err := s.SaveSettings(Settings{Name: "x", SaveDir: dir}); err == nil {
+			t.Errorf("SaveSettings accepted the unusable folder %s", dir)
+		}
+	}
+	if got := s.Settings(); got != before {
+		t.Errorf("settings changed to %+v after refused saves, want %+v", got, before)
+	}
+	if !s.State().Running {
+		t.Error("a refused save stopped the receiver")
+	}
+
+	// A folder that does not exist yet is created, and no probe is left.
+	dir := filepath.Join(t.TempDir(), "new", "save")
+	if err := s.SaveSettings(Settings{Name: "x", SaveDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".lanxfer-probe-*")); len(left) != 0 {
+		t.Errorf("probe files left: %v", left)
+	}
+}
+
+func TestStartingState(t *testing.T) {
+	s, _, _ := newTestService(t, svcOpts{skipStart: true})
+	if st := s.State(); !st.Starting || st.Running {
+		t.Fatalf("before start: %+v", st)
+	}
+	s.start()
+	<-s.ready
+	if st := s.State(); st.Starting || !st.Running {
+		t.Fatalf("after start: %+v", st)
+	}
+
+	busy, _, _ := newTestService(t, svcOpts{port: busyPort(t)})
+	if st := busy.State(); st.Starting || st.Running || st.Error == "" {
+		t.Fatalf("after a failed start: %+v", st)
+	}
+}
+
+func TestSaveDirBeforeStart(t *testing.T) {
+	s, _, _ := newTestService(t, svcOpts{skipStart: true})
+	if got, want := s.saveDir(), s.Settings().SaveDir; got == "" || got != want {
+		t.Fatalf("saveDir = %q, want the saved setting %q", got, want)
 	}
 }

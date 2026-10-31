@@ -5,8 +5,8 @@ const statusElement = document.getElementById("status")! as HTMLParagraphElement
 const peersElement = document.getElementById("peers")! as HTMLParagraphElement;
 
 // Placeholder page: later tasks replace it with the real chat UI.
-function showState(state: { running: boolean; error: string }) {
-    statusElement.textContent = state.running ? "Receiving" : `Not receiving: ${state.error}`;
+function showState(state: { starting: boolean; running: boolean; error: string }) {
+    statusElement.textContent = state.starting ? "Starting..." : state.running ? "Receiving" : `Not receiving: ${state.error}`;
 }
 
 function showChats(chats: { Online: boolean }[]) {
