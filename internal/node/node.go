@@ -498,6 +498,9 @@ func periodic(ctx context.Context, resp *discovery.Responder, reg *presence.Regi
 	defer probeTick.Stop()
 
 	broadcast()
+	// Probe the saved peers now too: those that are up come back at once,
+	// not after the first probe interval.
+	probe()
 	for {
 		select {
 		case <-ctx.Done():

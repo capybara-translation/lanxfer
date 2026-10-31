@@ -446,6 +446,36 @@ func TestRunSendsSavedPeersFirst(t *testing.T) {
 	}
 }
 
+// A saved peer is probed right after start, not after the first probe
+// interval (an hour here).
+func TestRunProbesSavedPeersAtStartup(t *testing.T) {
+	p := newFakePeer(t, "saved1", testID)
+	configDir := filepath.Join(t.TempDir(), "config")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved := fmt.Sprintf(`[{"id":"%s","name":"saved1","addr":"127.0.0.1:%d","last_seen":"2026-10-20T09:00:00Z","online":true}]`, testID, p.port())
+	if err := os.WriteFile(filepath.Join(configDir, "peers.json"), []byte(saved), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startNode(t, func(c *Config) {
+		c.ConfigDir = configDir
+		c.AnnounceEvery, c.ProbeEvery = time.Hour, time.Hour
+	})
+
+	buf := make([]byte, 2048)
+	p.conn.SetReadDeadline(time.Now().Add(waitTimeout))
+	for {
+		n, _, err := p.conn.ReadFromUDP(buf)
+		if err != nil {
+			t.Fatalf("no query reached the saved peer after start: %v", err)
+		}
+		if strings.Contains(string(buf[:n]), `"type":"query"`) {
+			return
+		}
+	}
+}
+
 func TestRunSendsEmptyPeersEventAtStartup(t *testing.T) {
 	h := startNode(t, func(c *Config) { c.AnnounceEvery, c.ProbeEvery = time.Hour, time.Hour })
 	select {
