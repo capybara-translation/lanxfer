@@ -167,3 +167,16 @@ func TestRejectsBrowserOrigin(t *testing.T) {
 		t.Error("without Origin: message was not shown")
 	}
 }
+
+// The Origin is chosen by the peer. A huge one must not fill the log.
+func TestRejectedOriginIsTruncatedInTheLog(t *testing.T) {
+	r := newRig(t)
+	origin := strings.Repeat("\x01", 1<<20) // every byte is escaped in %q, which is the worst case
+	w := r.do(http.MethodPost, "/messages", "hello", reqOpts{remote: "192.168.1.2:5555", origin: origin})
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", w.Code)
+	}
+	if n := r.logs.Len(); n == 0 || n >= 512 {
+		t.Errorf("log line is %d bytes, want 1..511: %.200q", n, r.logs.String())
+	}
+}

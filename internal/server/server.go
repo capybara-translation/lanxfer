@@ -140,7 +140,8 @@ func (s *Server) Handler() http.Handler {
 			w.Header().Set(IDHeader, s.deviceID)
 		}
 		if _, ok := r.Header["Origin"]; ok { // present, even if empty
-			s.logger.Printf("rejected browser request from %s (Origin %q)", r.RemoteAddr, r.Header.Get("Origin"))
+			// The Origin is chosen by the peer: log only its first 64 characters.
+			s.logger.Printf("rejected browser request from %s (Origin %.64q)", r.RemoteAddr, r.Header.Get("Origin"))
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
