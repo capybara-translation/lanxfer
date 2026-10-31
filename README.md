@@ -130,6 +130,12 @@ received item in its folder and never opens it, so a received program or
 `.app` is not run by accident. The app has the same trust model as the CLI:
 no authentication and no encryption (see [Security notes](#security-notes)).
 
+On macOS the app marks what it receives as downloaded (the quarantine
+attribute). macOS then asks before opening a received app and runs its usual
+checks on it. An unsigned app received this way will not open until you clear
+the mark with `xattr -cr <path>` or open it once with right-click, Open. The
+CLI (`lanxfer recv`) and the Windows app do not mark received files.
+
 ## Usage
 
 Receiver (waits in the foreground; stop with Ctrl-C):

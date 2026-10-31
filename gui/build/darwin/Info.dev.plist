@@ -21,6 +21,8 @@
             <string>appicon</string>
         <key>LSMinimumSystemVersion</key>
             <string>12.0.0</string>
+        <key>LSFileQuarantineEnabled</key>
+            <true/>
         <key>NSHighResolutionCapable</key>
             <string>true</string>
         <key>NSLocalNetworkUsageDescription</key>
