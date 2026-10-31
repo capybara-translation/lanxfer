@@ -12,6 +12,7 @@ const STALL_MS = 3000;
 
 export class CardView {
     readonly root: HTMLElement;
+    private icon: HTMLElement;
     private name: HTMLElement;
     private size: HTMLElement;
     private bar: HTMLElement;
@@ -23,9 +24,8 @@ export class CardView {
     constructor(private card: Card, onCancel: (card: Card) => void) {
         this.name = el("span", {cls: "card-name", attrs: {dir: "auto"}});
         this.size = el("span", {cls: "card-size"});
-        const icon = el("span", {cls: "card-icon"});
-        icon.textContent = card.update.Folder ? "📁" : "📄";
-        const head = el("div", {cls: "card-head"}, icon, this.name, this.size);
+        this.icon = el("span", {cls: "card-icon"});
+        const head = el("div", {cls: "card-head"}, this.icon, this.name, this.size);
         this.barFill = el("div", {cls: "bar-fill"});
         this.bar = el("div", {cls: "bar", attrs: {role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100"}}, this.barFill);
         this.status = el("span", {cls: "card-status"});
@@ -42,6 +42,9 @@ export class CardView {
         const u = card.update;
         const folder = u.Folder;
 
+        // A folder is only known to be one after the scan starts, which is
+        // after the card was made from the first, queued update.
+        setText(this.icon, folder ? "📁" : "📄");
         setText(this.name, cleanLabel(u.Name) + (folder ? "/" : ""));
         setText(this.size, this.sizeText(card));
 
