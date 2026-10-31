@@ -8,7 +8,7 @@
     "build:dev": "tsc --noEmit && vite build --minify false --mode development",
     "build": "tsc --noEmit && vite build --mode production",
     "preview": "vite preview",
-    "check": "node src/format.check.ts"
+    "check": "node src/format.check.ts && node src/transfers.check.ts"
   },
   "dependencies": {
     "@wailsio/runtime": "3.0.0"

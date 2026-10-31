@@ -38,8 +38,11 @@ var cancelledCtx = func() context.Context {
 
 // Update is the state of one queued, running, or finished file or folder.
 type Update struct {
-	ID          string // transfer ID, as returned by SendPaths
-	Name        string
+	ID   string // transfer ID, as returned by SendPaths
+	Name string
+	// Path is the absolute source path (AbsPath). The history entry of the
+	// item carries the same path, which is how a UI matches the two.
+	Path        string `json:"path"`
 	Folder      bool
 	Sent, Total int64 // bytes; for a folder, content bytes
 	Files       int   // files in a folder
@@ -184,7 +187,7 @@ func (m *Manager) SendPaths(peerKey string, p presence.Peer, paths []string) []s
 	for i, path := range paths {
 		m.seq++
 		it := &item{id: fmt.Sprintf("t%s-%d", m.prefix, m.seq), path: path}
-		it.base = Update{ID: it.id, Name: filepath.Base(path)}
+		it.base = Update{ID: it.id, Name: filepath.Base(path), Path: AbsPath(path)}
 		m.items[it.id] = it
 		items[i], ids[i] = it, it.id
 	}
@@ -302,7 +305,7 @@ func (m *Manager) send(ctx context.Context, peerKey string, p presence.Peer, it 
 	}
 	var plan *client.DirPlan
 	total := info.Size()
-	base := Update{ID: it.id, Name: name}
+	base := Update{ID: it.id, Name: name, Path: abs}
 	if info.IsDir() {
 		// Show a folder card while the scan runs.
 		base.Folder = true
@@ -313,7 +316,7 @@ func (m *Manager) send(ctx context.Context, peerKey string, p presence.Peer, it 
 			return e
 		}
 		total = plan.ContentSize
-		base = Update{ID: it.id, Name: plan.Name, Folder: true, Files: plan.Files, Skipped: len(plan.Skipped)}
+		base = Update{ID: it.id, Name: plan.Name, Path: abs, Folder: true, Files: plan.Files, Skipped: len(plan.Skipped)}
 	}
 	base.Total = total
 	m.begin(peerKey, it, base)

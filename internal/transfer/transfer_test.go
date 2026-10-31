@@ -221,7 +221,7 @@ func TestSendPathsFileAndFolder(t *testing.T) {
 	// A queued card appears for each path before anything is sent.
 	for i, id := range ids {
 		first := h.updatesFor(id)[0]
-		want := Update{ID: id, Name: filepath.Base([]string{file, folder}[i])}
+		want := Update{ID: id, Name: filepath.Base([]string{file, folder}[i]), Path: []string{file, folder}[i]}
 		if first != want {
 			t.Errorf("first update of %s = %+v, want %+v", id, first, want)
 		}
@@ -941,5 +941,66 @@ func TestIDsAreUniqueAcrossManagers(t *testing.T) {
 		}
 		seen[ids[0]] = true
 		time.Sleep(time.Millisecond) // the prefix is the start time
+	}
+}
+
+// A UI matches a finished item's history entry to its live card by the
+// source path, so every update of every kind of outcome must carry it.
+func TestEveryUpdateCarriesTheSourcePath(t *testing.T) {
+	p, _ := receiver(t)
+	src := t.TempDir()
+	writeFile(t, filepath.Join(src, "rel.txt"), 5)
+	writeFile(t, filepath.Join(src, "trip", "one.txt"), 5)
+	writeFile(t, filepath.Join(src, "queued.txt"), 5)
+	deep := filepath.Join(src, "deep")
+	cur := deep
+	for i := 0; i < 70; i++ {
+		cur = filepath.Join(cur, "d")
+	}
+	writeFile(t, filepath.Join(cur, "f.txt"), 1)
+	t.Chdir(src)
+
+	h := newHarness()
+	release := make(chan struct{})
+	h.locateFn = func(ctx context.Context, p presence.Peer, port int) (target.Target, error) {
+		<-release // holds the first item so the last one can be cancelled while queued
+		return target.Target{Addr: p.Addr, ID: p.ID, Name: p.Name}, nil
+	}
+	m := newManager(t, h)
+	var releaseOnce sync.Once
+	releaseLookup := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseLookup)
+
+	// "rel.txt" is relative on purpose: the path must come back absolute.
+	paths := []string{"rel.txt", "trip", "missing.txt", "deep", "queued.txt"}
+	ids := m.SendPaths(peerKey, p, paths)
+	if !m.Cancel(ids[4]) {
+		t.Fatal("Cancel of a queued item returned false")
+	}
+	releaseLookup()
+	h.wait(t, ids...)
+
+	for i, id := range ids {
+		want := filepath.Join(src, paths[i])
+		us := h.updatesFor(id)
+		if len(us) < 2 {
+			t.Fatalf("%s: %d updates", paths[i], len(us))
+		}
+		for _, u := range us {
+			if u.Path != want {
+				t.Errorf("%s: update %+v has Path %q, want %q", paths[i], u, u.Path, want)
+			}
+		}
+	}
+	for _, e := range h.recorded() {
+		found := false
+		for _, id := range ids {
+			if h.last(id).Path == e.Path {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("entry path %q matches no update path", e.Path)
+		}
 	}
 }

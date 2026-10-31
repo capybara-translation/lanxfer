@@ -2,12 +2,15 @@
 // item with "transfer" events keyed by the update ID, and, when the item ends,
 // records a history entry that arrives as a "message" event. The entry is the
 // permanent card; the live card must go away exactly when it appears, so the
-// two are matched here (the entry has no transfer ID, so by direction, kind
-// and name, oldest card first).
+// two are matched here. The entry has no transfer ID, so it is matched by
+// direction and source path: Go puts the absolute source path in both the
+// update and the entry. Cards of the same path (the same file sent twice, or
+// to two peers) are taken oldest first, those of the entry's chat before the
+// others. An entry whose path matches no card matches nothing.
 
 import type {Entry} from "../bindings/github.com/capybara-translation/lanxfer/internal/history/models.js";
 import type {Update} from "../bindings/github.com/capybara-translation/lanxfer/internal/transfer/models.js";
-import {RateEstimator} from "./rate.js";
+import {RateEstimator} from "./rate.ts";
 
 // A finished card whose entry has not arrived is dropped after this long, so
 // a lost entry cannot leave a card behind for good.
@@ -87,12 +90,12 @@ export class LiveTransfers {
     // entry arrives, whether or not its Done update came first; the Done
     // update that follows is then ignored.
     entryAdded(key: string, e: Entry): Card | null {
-        if (e.dir !== "out" || e.kind === "text") {
+        if (e.dir !== "out" || e.kind === "text" || !e.path) {
             return null;
         }
         let best: Card | null = null;
         for (const card of this.cards.values()) {
-            if (card.update.Name !== e.name) {
+            if (card.update.path !== e.path) {
                 continue;
             }
             // Prefer the same chat; within a chat, the oldest card.
