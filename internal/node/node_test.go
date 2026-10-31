@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -76,6 +77,7 @@ type harness struct {
 	events    chan Event
 	logs      *syncBuffer
 	out       *syncBuffer
+	node      *Node
 	cancel    context.CancelFunc
 	done      chan error
 	stopped   bool
@@ -83,7 +85,7 @@ type harness struct {
 	configDir string
 }
 
-// startNode runs a node on a free loopback-reachable port with short timers.
+// startNode starts a node on a free loopback-reachable port with short timers.
 // tweak, if not nil, may change the config before the node starts.
 func startNode(t *testing.T, tweak func(*Config)) *harness {
 	t.Helper()
@@ -118,7 +120,13 @@ func startNode(t *testing.T, tweak func(*Config)) *harness {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
-	go func() { h.done <- Run(ctx, h.cfg) }()
+	n, err := Start(ctx, h.cfg)
+	if err != nil {
+		cancel()
+		t.Fatalf("Start: %v", err)
+	}
+	h.node = n
+	go func() { h.done <- n.Wait() }()
 	t.Cleanup(func() { h.stop() })
 	h.waitListening()
 	return h
@@ -568,13 +576,13 @@ func TestRunWithEmptyConfigDirWarns(t *testing.T) {
 	}
 }
 
-func TestEventRecorder(t *testing.T) {
+func TestEventRecorderReportsOnlySends(t *testing.T) {
 	var got []Event
 	rec := &eventRecorder{
 		store:  history.Open(filepath.Join(t.TempDir(), "missing-folder", "history.jsonl")),
 		events: &emitter{fn: func(e Event) { got = append(got, e) }},
 	}
-	e := history.Entry{Dir: history.In, Kind: history.KindText, Text: "x", Status: history.StatusOK}
+	e := history.Entry{Dir: history.Out, Kind: history.KindText, Text: "x", Status: history.StatusOK}
 	if err := rec.Append(e); err == nil {
 		t.Fatal("Append succeeded although the folder does not exist")
 	}
@@ -613,5 +621,296 @@ func TestEventRecorder(t *testing.T) {
 	rec.events = &emitter{} // no callback
 	if err := rec.Append(e); err != nil {
 		t.Errorf("Append with no OnEvent: %v", err)
+	}
+
+	// Receipts are reported by the server, so the recorder stays silent for
+	// them; otherwise each receipt would be reported twice.
+	got = nil
+	rec.events = &emitter{fn: func(e Event) { got = append(got, e) }}
+	in := e
+	in.Dir = history.In
+	if err := rec.Append(in); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("event sent for a receipt: %+v", got)
+	}
+}
+
+// drainEntries returns the entries among the events that arrive until quiet
+// has passed without another event.
+func (h *harness) drainEntries(quiet time.Duration) []history.Entry {
+	h.t.Helper()
+	var got []history.Entry
+	for {
+		select {
+		case e := <-h.events:
+			if e.Entry != nil {
+				got = append(got, *e.Entry)
+			}
+		case <-time.After(quiet):
+			return got
+		}
+	}
+}
+
+func TestRunReportsReceiptWithoutHistory(t *testing.T) {
+	h := startNode(t, func(c *Config) { c.ConfigDir = "" })
+	src := writeTemp(t, "hello.txt", "hi")
+	if _, err := client.Send(context.Background(), "127.0.0.1", h.cfg.Port, src, client.SendOptions{From: "sender"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	e := h.waitEvent(func(e Event) bool { return e.Entry != nil })
+	if e.Entry.Kind != history.KindFile || e.Entry.SavedAs != "hello.txt" || e.Entry.Time.IsZero() || e.Entry.V != history.Version {
+		t.Errorf("file entry = %+v", *e.Entry)
+	}
+
+	if _, err := client.Say(context.Background(), "127.0.0.1", h.cfg.Port, "ping", client.SendOptions{From: "sender"}); err != nil {
+		t.Fatalf("Say: %v", err)
+	}
+	e = h.waitEvent(func(e Event) bool { return e.Entry != nil })
+	if e.Entry.Kind != history.KindText || e.Entry.Text != "ping" || e.Entry.Time.IsZero() {
+		t.Errorf("text entry = %+v", *e.Entry)
+	}
+	if !strings.Contains(h.out.String(), "ping") {
+		t.Errorf("text not printed to Out: %q", h.out.String())
+	}
+}
+
+func TestRunReportsReceiptWhenHistoryFails(t *testing.T) {
+	// A folder where the history file should be makes every write fail.
+	h := startNode(t, func(c *Config) {
+		if err := os.MkdirAll(filepath.Join(c.ConfigDir, "history.jsonl"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	})
+	// A text that cannot be recorded is refused, so it is not a receipt.
+	if _, err := client.Say(context.Background(), "127.0.0.1", h.cfg.Port, "lost", client.SendOptions{From: "sender"}); err == nil {
+		t.Fatal("Say succeeded although the history cannot be written")
+	}
+	src := writeTemp(t, "hello.txt", "hi")
+	if _, err := client.Send(context.Background(), "127.0.0.1", h.cfg.Port, src, client.SendOptions{From: "sender"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	e := h.waitEvent(func(e Event) bool { return e.Entry != nil })
+	if e.Entry.Kind != history.KindFile || e.Entry.SavedAs != "hello.txt" {
+		t.Errorf("first entry = %+v, want the file (the refused text is no receipt)", *e.Entry)
+	}
+}
+
+func TestRunReportsEachReceiptOnce(t *testing.T) {
+	h := startNode(t, nil)
+	src := writeTemp(t, "hello.txt", "hi")
+	if _, err := client.Send(context.Background(), "127.0.0.1", h.cfg.Port, src, client.SendOptions{From: "sender"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, err := client.Say(context.Background(), "127.0.0.1", h.cfg.Port, "ping", client.SendOptions{From: "sender"}); err != nil {
+		t.Fatalf("Say: %v", err)
+	}
+	body := `{"dir":"out","kind":"text","text":"sent from cli","status":"ok"}`
+	if status := postLocalHistory(t, h, h.deviceID(), body); status != http.StatusNoContent {
+		t.Fatalf("status = %d", status)
+	}
+
+	got := h.drainEntries(300 * time.Millisecond)
+	var kinds []string
+	for _, e := range got {
+		kinds = append(kinds, e.Dir+"/"+e.Kind+"/"+e.Text+e.SavedAs)
+	}
+	want := []string{"in/file/hello.txt", "in/text/ping", "out/text/sent from cli"}
+	if len(kinds) != len(want) {
+		t.Fatalf("entries = %q, want %q", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Errorf("entries = %q, want %q", kinds, want)
+			break
+		}
+	}
+}
+
+func TestRecordEmitsAndWrites(t *testing.T) {
+	h := startNode(t, nil)
+	e := history.Entry{Dir: history.Out, Kind: history.KindText, Text: "sent", PeerName: "other", Status: history.StatusOK}
+	if err := h.node.Record(e); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	ev := h.waitEvent(func(e Event) bool { return e.Entry != nil })
+	if ev.Entry.Text != "sent" || ev.Entry.Time.IsZero() || ev.Entry.V != history.Version {
+		t.Errorf("event entry = %+v", *ev.Entry)
+	}
+	histPath := filepath.Join(h.configDir, "history.jsonl")
+	entries, err := history.ReadAll(histPath)
+	if err != nil || len(entries) != 1 || !entries[0].Time.Equal(ev.Entry.Time) {
+		t.Fatalf("history = %v, %v; want one entry with the event's time", entries, err)
+	}
+	if !e.Time.IsZero() || e.V != 0 {
+		t.Error("caller's entry was modified")
+	}
+
+	// An entry the history refuses is neither written nor reported.
+	if err := h.node.Record(history.Entry{Dir: history.Out}); err == nil {
+		t.Error("Record accepted an invalid entry")
+	}
+	if got := h.drainEntries(100 * time.Millisecond); len(got) != 0 {
+		t.Errorf("event for an invalid entry: %+v", got)
+	}
+
+	// After shutdown the history still takes the entry, but nothing is
+	// reported.
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	h.drainEntries(10 * time.Millisecond)
+	if err := h.node.Record(e); err != nil {
+		t.Fatalf("Record after shutdown: %v", err)
+	}
+	if got := h.drainEntries(100 * time.Millisecond); len(got) != 0 {
+		t.Errorf("event after shutdown: %+v", got)
+	}
+	entries, err = history.ReadAll(histPath)
+	if err != nil || len(entries) != 2 {
+		t.Errorf("history has %v, %v; want both entries", entries, err)
+	}
+}
+
+func TestRecordWithoutHistoryEmits(t *testing.T) {
+	h := startNode(t, func(c *Config) { c.ConfigDir = "" })
+	e := history.Entry{Dir: history.Out, Kind: history.KindText, Text: "sent", Status: history.StatusOK}
+	if err := h.node.Record(e); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	ev := h.waitEvent(func(e Event) bool { return e.Entry != nil })
+	if ev.Entry.Text != "sent" || ev.Entry.Time.IsZero() || ev.Entry.V != history.Version {
+		t.Errorf("event entry = %+v", *ev.Entry)
+	}
+}
+
+func TestPeersReturnsList(t *testing.T) {
+	h := startNode(t, nil)
+	if got := h.node.Peers(); len(got) != 0 {
+		t.Errorf("Peers() = %+v, want none", got)
+	}
+	p := newFakePeer(t, "peer1", testID)
+	p.announceUntilLearned(h)
+	check := func(when string) {
+		t.Helper()
+		got := h.node.Peers()
+		if len(got) != 1 || got[0].Name != "peer1" || got[0].ID != testID {
+			t.Errorf("Peers() %s = %+v, want peer1", when, got)
+		}
+	}
+	check("while running")
+	if err := h.stop(); err != nil {
+		t.Fatal(err)
+	}
+	check("after shutdown")
+}
+
+func TestNodeIDMatchesAnnouncedID(t *testing.T) {
+	h := startNode(t, nil)
+	if got, want := h.node.ID(), h.deviceID(); got == "" || got != want {
+		t.Errorf("ID() = %q, want %q", got, want)
+	}
+	noID := startNode(t, func(c *Config) { c.ConfigDir = "" })
+	if got := noID.node.ID(); got != "" {
+		t.Errorf("ID() without a config folder = %q, want empty", got)
+	}
+}
+
+func TestStartReturnsListenError(t *testing.T) {
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	port := l.Addr().(*net.TCPAddr).Port
+
+	before := runtime.NumGoroutine()
+	cfg := Config{
+		SaveDir:   filepath.Join(t.TempDir(), "save"),
+		ConfigDir: t.TempDir(),
+		Port:      port,
+		MaxSize:   1 << 20,
+		Name:      "n",
+		Logger:    log.New(io.Discard, "", 0),
+		OnEvent:   func(Event) { t.Error("event from a node that did not start") },
+	}
+	n, err := Start(context.Background(), cfg)
+	if err == nil {
+		t.Fatal("Start succeeded on a port in use")
+	}
+	if n != nil {
+		t.Error("Start returned a node together with an error")
+	}
+
+	// Nothing is left running: no goroutines, and the discovery port is free.
+	deadline := time.Now().Add(waitTimeout)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("goroutines: %d before Start, %d after a failed Start", before, runtime.NumGoroutine())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	u, err := net.ListenUDP("udp4", &net.UDPAddr{Port: port})
+	if err != nil {
+		t.Errorf("discovery port still held: %v", err)
+	} else {
+		u.Close()
+	}
+}
+
+func TestWaitReturnsAfterShutdownFinishes(t *testing.T) {
+	h := startNode(t, nil)
+	h.cancel()
+	select {
+	case err := <-h.done:
+		if err != nil {
+			t.Errorf("Wait = %v, want nil", err)
+		}
+		h.stopped = true
+	case <-time.After(waitTimeout):
+		t.Fatal("Wait did not return after cancel")
+	}
+	// The port is free as soon as Wait has returned.
+	l, err := net.Listen("tcp", fmt.Sprintf(":%d", h.cfg.Port))
+	if err != nil {
+		t.Errorf("port still held after Wait: %v", err)
+	} else {
+		l.Close()
+	}
+}
+
+func TestRunIsStartThenWait(t *testing.T) {
+	cfg := Config{
+		SaveDir:   filepath.Join(t.TempDir(), "save"),
+		ConfigDir: filepath.Join(t.TempDir(), "config"),
+		Port:      freePort(t),
+		MaxSize:   1 << 20,
+		Name:      "n",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, cfg) }()
+	deadline := time.Now().Add(waitTimeout)
+	for {
+		c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", cfg.Port), 100*time.Millisecond)
+		if err == nil {
+			c.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Run never started listening")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+	case <-time.After(waitTimeout):
+		t.Fatal("Run did not return after cancel")
 	}
 }

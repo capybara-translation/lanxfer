@@ -41,14 +41,17 @@ const (
 // Event reports something that happened in a running node. Exactly one of
 // the fields is set.
 type Event struct {
-	// Entry is an entry the node just added to the history: a receipt, or a
-	// send reported by a local CLI through POST /local/history.
+	// Entry is an entry the node reports: a receipt of a file, folder or text
+	// (reported even if the history could not record it, but not a text that
+	// could not be recorded, since that one is refused), or a send added by
+	// Record or by a local CLI through POST /local/history. Its Time and V are
+	// set.
 	Entry *history.Entry
 	// Peers is the whole peer list, sent whenever it changed.
 	Peers []presence.Peer
 }
 
-// Config configures Run.
+// Config configures Start and Run.
 type Config struct {
 	SaveDir   string
 	ConfigDir string // identity.ConfigDir() in production; a temp folder in tests
@@ -63,20 +66,44 @@ type Config struct {
 	// for entries, a background goroutine for peers), and some calls are
 	// made while the node holds internal locks. It must return quickly: hand
 	// the event to a channel or another goroutine instead of doing slow
-	// work. It is never called after Run returns, so it is safe to close a
-	// channel it sends to once Run has returned.
+	// work. It is never called after Wait returns, so it is safe to close a
+	// channel it sends to once Wait has returned.
 	OnEvent func(Event)
 	// AnnounceEvery and ProbeEvery default to 60 s and 30 s when zero.
 	AnnounceEvery, ProbeEvery time.Duration
 }
 
+// Node is a running receiver. Start returns one; Wait ends it.
+type Node struct {
+	deviceID string
+	store    *history.Store // nil when the history is unavailable
+	reg      *presence.Registry
+	events   *emitter
+
+	done chan struct{} // closed when shutdown has finished
+	err  error         // the result of Wait; set before done is closed
+}
+
 // Run starts the receiver and blocks until ctx is cancelled, then shuts it
-// down and returns nil. It returns an error if the HTTP port cannot be
-// opened. A missing config folder or a busy discovery port only produce
-// warnings: the node keeps receiving, without history, saved peers, or
-// discoverability respectively. Without a history, a received text is shown
-// on Out but not saved, and is still answered with 204.
+// down and returns nil. It is Start followed by Wait; see Start for what can
+// fail.
 func Run(ctx context.Context, cfg Config) error {
+	n, err := Start(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	return n.Wait()
+}
+
+// Start opens the HTTP port and starts the receiver in the background. It
+// returns an error, with nothing left running, if the save folder is unusable
+// or the HTTP port cannot be opened. A missing config folder or a busy
+// discovery port only produce warnings: the node keeps receiving, without
+// history, saved peers, or discoverability respectively. Without a history, a
+// received text is shown on Out but not saved, and is still answered with 204.
+//
+// The node runs until ctx is cancelled; Wait returns once it has shut down.
+func Start(ctx context.Context, cfg Config) (*Node, error) {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
@@ -89,7 +116,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// the working directory.
 	absDir, err := filepath.Abs(cfg.SaveDir)
 	if err != nil {
-		return fmt.Errorf("cannot resolve save directory: %w", err)
+		return nil, fmt.Errorf("cannot resolve save directory: %w", err)
 	}
 	cfg.SaveDir = absDir
 	if cfg.AnnounceEvery <= 0 {
@@ -101,18 +128,19 @@ func Run(ctx context.Context, cfg Config) error {
 
 	st, err := server.NewStorage(cfg.SaveDir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	n, err := st.RemoveStaleParts(staleAfter)
-	if n > 0 {
-		logger.Printf("removed %d stale partial transfer(s)", n)
+	removed, err := st.RemoveStaleParts(staleAfter)
+	if removed > 0 {
+		logger.Printf("removed %d stale partial transfer(s)", removed)
 	}
 	if err != nil {
 		logger.Printf("warning: could not remove stale partial transfers: %v", err)
 	}
 
 	// Open the HTTP port first: if it is taken there is nothing else to
-	// clean up.
+	// clean up. Everything below cannot fail, so no error is returned after
+	// this point.
 	srv := &http.Server{
 		Addr: fmt.Sprintf(":%d", cfg.Port),
 		// Defend against clients that open a connection and never send
@@ -121,27 +149,29 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Handlers can still be running after Run stops waiting for them, so
+	// Handlers can still be running after the node stops waiting for them, so
 	// events are gated: close() waits for emits in flight and silences the
-	// rest. It is deferred so it runs after the final Save below.
+	// rest. It runs after the final Save in the supervisor below.
 	events := &emitter{fn: cfg.OnEvent}
-	defer events.close()
 
 	deviceID, historyPath, peersPath := prepareConfigDir(cfg.ConfigDir, logger)
 
+	n := &Node{deviceID: deviceID, events: events, done: make(chan struct{})}
 	// rec must stay a true nil interface when the history is unavailable:
 	// wrapping a nil *history.Store would look enabled and fail on use.
 	var rec server.Recorder
 	if historyPath != "" {
-		rec = &eventRecorder{store: history.Open(historyPath), events: events}
+		n.store = history.Open(historyPath)
+		rec = &eventRecorder{store: n.store, events: events}
 	}
 	reg := presence.NewRegistry(peersPath)
 	if err := reg.Load(); err != nil {
 		logger.Printf("warning: could not load saved peers: %v", err)
 	}
+	n.reg = reg
 
 	// dirty tells the saver goroutine that the peer list changed. The send
 	// never blocks, so neither the discovery read loop nor an HTTP handler
@@ -167,6 +197,9 @@ func Run(ctx context.Context, cfg Config) error {
 	opts := []server.Option{
 		server.WithDeviceID(deviceID),
 		server.WithPresence(observe, reg.Peers),
+		// Receipts are reported here, not by the recorder, so they reach
+		// the caller even when the history is unavailable or fails.
+		server.WithNotify(func(e history.Entry) { events.emit(Event{Entry: &e}) }),
 	}
 	if rec != nil {
 		opts = append(opts, server.WithHistory(rec))
@@ -175,9 +208,8 @@ func Run(ctx context.Context, cfg Config) error {
 	srv.Handler = receiver.Handler()
 
 	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	var wg sync.WaitGroup
-	// stopBackground ends every goroutine Run started and waits for them.
+	// stopBackground ends every goroutine Start launched and waits for them.
 	stopBackground := func() {
 		cancel()
 		wg.Wait()
@@ -216,29 +248,79 @@ func Run(ctx context.Context, cfg Config) error {
 	logger.Printf("lanxfer recv: listening on %s as %q, saving to %s", srv.Addr, cfg.Name, cfg.SaveDir)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
-	select {
-	case err := <-serveErr:
-		stopBackground()
-		return err
-	case <-ctx.Done():
-	}
 
-	logger.Printf("shutting down")
-	// Close, not Shutdown: Shutdown would let transfers run to the end, but
-	// the caller asked to stop now. Closing the connections makes each
-	// upload in progress fail and delete its temporary file.
-	srv.Close()
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), shutdownWait)
-	defer waitCancel()
-	if err := receiver.WaitUploads(waitCtx); err != nil {
-		logger.Printf("warning: exiting before interrupted transfers finished cleaning up; a later recv removes what is left")
+	go func() {
+		defer close(n.done) // runs last: Wait returns only after everything below
+		defer events.close()
+		select {
+		case err := <-serveErr:
+			stopBackground()
+			n.err = err
+			return
+		case <-ctx.Done():
+		}
+
+		logger.Printf("shutting down")
+		// Close, not Shutdown: Shutdown would let transfers run to the end, but
+		// the caller asked to stop now. Closing the connections makes each
+		// upload in progress fail and delete its temporary file.
+		srv.Close()
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), shutdownWait)
+		defer waitCancel()
+		if err := receiver.WaitUploads(waitCtx); err != nil {
+			logger.Printf("warning: exiting before interrupted transfers finished cleaning up; a later recv removes what is left")
+		}
+		stopBackground()
+		// LastSeen changes do not trigger a save while running; persist them now.
+		if err := reg.Save(); err != nil {
+			logger.Printf("warning: could not save peers: %v", err)
+		}
+	}()
+	return n, nil
+}
+
+// Wait blocks until the context given to Start is cancelled and the node has
+// shut down, and returns nil. If the HTTP server fails while running, it
+// shuts down at once and Wait returns that error. Wait is meant to be called
+// once.
+func (n *Node) Wait() error {
+	<-n.done
+	return n.err
+}
+
+// Peers returns the known peers. It also works during and after shutdown.
+func (n *Node) Peers() []presence.Peer {
+	return n.reg.Peers()
+}
+
+// ID returns this node's device ID, or "" if it has none.
+func (n *Node) ID() string {
+	return n.deviceID
+}
+
+// Record adds e to the history, if there is one, and reports it as an Event.
+// Without a history it only reports the event and returns nil. An entry the
+// history refuses is not reported. Time defaults to now, and V is set. After
+// shutdown the history is still written, but no event is sent.
+func (n *Node) Record(e history.Entry) error {
+	e = stamp(e)
+	if n.store != nil {
+		if err := n.store.Append(e); err != nil {
+			return err
+		}
 	}
-	stopBackground()
-	// LastSeen changes do not trigger a save while running; persist them now.
-	if err := reg.Save(); err != nil {
-		logger.Printf("warning: could not save peers: %v", err)
-	}
+	n.events.emit(Event{Entry: &e})
 	return nil
+}
+
+// stamp fixes the time and version of e so that the history file and the
+// event carry the same values.
+func stamp(e history.Entry) history.Entry {
+	if e.Time.IsZero() {
+		e.Time = time.Now()
+	}
+	e.V = history.Version
+	return e
 }
 
 // prepareConfigDir creates the config folder and loads the device ID. It
@@ -310,7 +392,10 @@ func (m *emitter) close() {
 	m.mu.Unlock()
 }
 
-// eventRecorder appends to the history and reports each success as an event.
+// eventRecorder appends to the history and reports each sent entry as an
+// event. Received entries are reported through server.WithNotify instead, so
+// they are not reported twice and still reach the caller when this recorder
+// fails.
 type eventRecorder struct {
 	store  *history.Store
 	events *emitter
@@ -318,14 +403,13 @@ type eventRecorder struct {
 
 func (r *eventRecorder) Append(e history.Entry) error {
 	// Fix the time here so the event carries the same time as the file.
-	if e.Time.IsZero() {
-		e.Time = time.Now()
-	}
-	e.V = history.Version
+	e = stamp(e)
 	if err := r.store.Append(e); err != nil {
 		return err
 	}
-	r.events.emit(Event{Entry: &e})
+	if e.Dir == history.Out {
+		r.events.emit(Event{Entry: &e})
+	}
 	return nil
 }
 

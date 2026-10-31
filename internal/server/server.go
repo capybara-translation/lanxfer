@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"path/filepath"
+	"time"
 
 	"github.com/capybara-translation/lanxfer/internal/history"
 	"github.com/capybara-translation/lanxfer/internal/humanize"
@@ -59,6 +60,17 @@ func WithPresence(observe func(presence.Sighting), peers func() []presence.Peer)
 	return func(s *Server) { s.observe, s.peers = observe, peers }
 }
 
+// WithNotify calls fn with an entry for every successful receipt of a file,
+// folder or text, whether or not it could be recorded in the history. A text
+// that cannot be recorded is refused, so it is not reported. The entry has its
+// Time and V set and the same fields as the history entry.
+//
+// fn is called from HTTP handlers, so it must not block. Texts are reported
+// after they are recorded and printed; files and folders after they are saved.
+func WithNotify(fn func(history.Entry)) Option {
+	return func(s *Server) { s.notify = fn }
+}
+
 // Server holds the HTTP handlers of the receiving side.
 type Server struct {
 	storage *Storage
@@ -71,6 +83,7 @@ type Server struct {
 	history  Recorder
 	observe  func(presence.Sighting)
 	peers    func() []presence.Peer
+	notify   func(history.Entry)
 }
 
 // New creates a receive server. maxSize is the maximum number of bytes
@@ -80,6 +93,9 @@ func New(storage *Storage, maxSize int64, inbox *Inbox, logger *log.Logger, opts
 	s := &Server{storage: storage, maxSize: maxSize, inbox: inbox, logger: logger, uploads: newInflight()}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if inbox != nil {
+		inbox.notify = s.notify
 	}
 	return s
 }
@@ -257,19 +273,30 @@ func senderOf(r *http.Request) senderInfo {
 	return snd
 }
 
-// record adds a successful receipt to the history. The file or folder is
-// already saved, so a failure only logs a warning.
+// record adds a successful receipt to the history and reports it to the
+// notify callback. The file or folder is already saved, so a failure to record
+// only logs a warning and the receipt is still reported.
 func (s *Server) record(e history.Entry, snd senderInfo) {
-	if s.history == nil {
+	if s.history == nil && s.notify == nil {
 		return
 	}
 	e.PeerID, e.PeerName = snd.id, snd.name
 	if snd.ip.IsValid() {
 		e.PeerAddr = snd.ip.String()
 	}
-	if err := s.history.Append(e); err != nil {
-		s.logger.Printf("warning: could not record received %s %q in the history: %s",
-			e.Kind, e.SavedAs, sanitize(err.Error()))
+	// Fix the time here so the history and the notification carry the same one.
+	if e.Time.IsZero() {
+		e.Time = time.Now()
+	}
+	if s.history != nil {
+		if err := s.history.Append(e); err != nil {
+			s.logger.Printf("warning: could not record received %s %q in the history: %s",
+				e.Kind, e.SavedAs, sanitize(err.Error()))
+		}
+	}
+	if s.notify != nil {
+		e.V = history.Version
+		s.notify(e)
 	}
 }
 

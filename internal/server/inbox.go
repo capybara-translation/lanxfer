@@ -19,6 +19,9 @@ type Inbox struct {
 	rec Recorder
 	out io.Writer
 	now func() time.Time
+	// notify, if not nil, is called with each message once it is delivered.
+	// New sets it from WithNotify.
+	notify func(history.Entry)
 }
 
 // NewInbox returns an Inbox that records to rec and prints to out. A nil rec
@@ -30,22 +33,35 @@ func NewInbox(rec Recorder, out io.Writer) *Inbox {
 
 // Deliver records one message and prints it. from is the sender's
 // self-declared name and fromID its device ID; both may be empty. addr is the
-// sender's IP address taken from the connection.
+// sender's IP address taken from the connection. After the message is
+// recorded and printed, it is reported to the notify callback, outside the
+// lock that keeps messages whole.
 func (in *Inbox) Deliver(from, fromID string, addr netip.Addr, text string) error {
 	now := in.now()
-	block := formatMessage(now, from, addr, text)
+	e := history.Entry{
+		Time: now, Dir: history.In, Kind: history.KindText, Text: text,
+		PeerID: fromID, PeerName: from, PeerAddr: addr.String(), Status: history.StatusOK,
+	}
+	if err := in.store(e, formatMessage(now, from, addr, text)); err != nil {
+		return err
+	}
+	if in.notify != nil {
+		e.V = history.Version
+		in.notify(e)
+	}
+	return nil
+}
 
+// store records e and prints block under the lock, so concurrent messages are
+// recorded and shown whole and in the same order.
+func (in *Inbox) store(e history.Entry, block string) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
 
 	// With a history, record first so a message is never shown without being
 	// saved; on failure the sender gets an error and nothing is printed.
 	if in.rec != nil {
-		err := in.rec.Append(history.Entry{
-			Time: now, Dir: history.In, Kind: history.KindText, Text: text,
-			PeerID: fromID, PeerName: from, PeerAddr: addr.String(), Status: history.StatusOK,
-		})
-		if err != nil {
+		if err := in.rec.Append(e); err != nil {
 			return fmt.Errorf("record message: %w", err)
 		}
 	}

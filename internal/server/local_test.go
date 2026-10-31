@@ -195,6 +195,11 @@ func TestPutRecordsHistory(t *testing.T) {
 				PeerAddr: "192.168.68.53", Name: "a.txt", SavedAs: "a (1).txt",
 				Path: filepath.Join(r.storage.Dir, "a (1).txt"), Size: 5, Status: history.StatusOK,
 			}
+			// The server fixes the time so the history and the notification agree.
+			if got[0].Time.IsZero() {
+				t.Error("entry has no time")
+			}
+			got[0].Time = time.Time{}
 			if got[0] != want {
 				t.Errorf("entry = %+v\nwant    %+v", got[0], want)
 			}
@@ -215,6 +220,11 @@ func TestPutRecordsHistory(t *testing.T) {
 				PeerAddr: "192.168.68.53", Name: "trip", SavedAs: "trip",
 				Path: filepath.Join(r.storage.Dir, "trip"), Size: 8, Files: 2, Status: history.StatusOK,
 			}
+			// The server fixes the time so the history and the notification agree.
+			if got[0].Time.IsZero() {
+				t.Error("entry has no time")
+			}
+			got[0].Time = time.Time{}
 			if got[0] != want {
 				t.Errorf("entry = %+v\nwant    %+v", got[0], want)
 			}
