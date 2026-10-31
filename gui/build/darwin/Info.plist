@@ -23,6 +23,8 @@
             <string>12.0.0</string>
         <key>NSHighResolutionCapable</key>
             <string>true</string>
+        <key>NSLocalNetworkUsageDescription</key>
+            <string>lanxfer finds other machines and exchanges files with them on your local network.</string>
         <key>NSHumanReadableCopyright</key>
             <string>© 2026, capybara-translation</string>
     </dict>

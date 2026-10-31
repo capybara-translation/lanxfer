@@ -1,16 +1,8 @@
 package main
 
 import (
-	_ "embed"
-
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
-
-// trayIcon is a monochrome image; macOS draws it as a template, so it follows
-// the light or dark menu bar.
-//
-//go:embed trayicon.png
-var trayIcon []byte
 
 // showWindow brings the main window back, whether it is hidden, minimised or
 // behind other windows.
@@ -39,7 +31,7 @@ func newTray(app *application.App, show func(), saveDir func() string) *applicat
 	menu.Add("Quit").OnClick(func(*application.Context) { app.Quit() })
 
 	tray := app.SystemTray.New()
-	tray.SetTemplateIcon(trayIcon)
+	setTrayIcon(tray)
 	tray.SetTooltip("lanxfer")
 	tray.SetMenu(menu)
 	return tray
