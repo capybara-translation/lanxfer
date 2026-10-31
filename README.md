@@ -3,11 +3,16 @@
 **LAN transfer** — send files and messages directly between machines on your
 LAN, with no server in between.
 
-lanxfer is a small, dependency-free Go CLI. Run `lanxfer recv` on the machine
-that should receive, then `lanxfer send <name> <file-or-folder>` on the
-machine that has it. Receivers are found automatically on the local network.
-Short text can be sent the same way with `lanxfer say`. A desktop app with
-drag and drop is built from the same code; see [GUI](#gui).
+lanxfer is a desktop app and a command-line tool. In the app, pick a machine
+from the list, then drop files or folders on the window or type a message. It
+keeps receiving with the window closed. See [GUI](#gui).
+
+The command-line tool is a small, dependency-free Go CLI that does the same
+from a terminal. Run `lanxfer recv` on the machine that should receive, then
+`lanxfer send <name> <file-or-folder>` on the machine that has it. Short text
+can be sent the same way with `lanxfer say`.
+
+Either way, machines are found automatically on the local network.
 
 ## Status
 
@@ -19,30 +24,13 @@ macOS and Windows is available as a download; see
 
 ## Install
 
-### Homebrew (macOS / Linux)
-
-    brew install --cask capybara-translation/tap/lanxfer
-
-To upgrade to the latest release:
-
-    brew upgrade --cask capybara-translation/tap/lanxfer
-
-### go install
-
-    go install github.com/capybara-translation/lanxfer/cmd/lanxfer@latest
-
-### Pre-built binaries
-
-Download the archive for your platform from the
-[Releases page](https://github.com/capybara-translation/lanxfer/releases)
-(`tar.gz` for macOS/Linux, `zip` for Windows) and put the `lanxfer` binary
-somewhere on your `PATH`. `checksums.txt` on the same page lists the SHA-256
-of every command-line archive.
+lanxfer comes as a desktop app and as a command-line tool. Install either or
+both: they share the device ID and the history.
 
 ### Desktop app
 
-The app in [GUI](#gui) comes from the same Releases page. It is not signed
-or notarized yet, so macOS and Windows warn before the first launch.
+The app is described in [GUI](#gui). It is not signed or notarized yet, so
+macOS and Windows warn before the first launch.
 
 On macOS, Homebrew is the easiest way. It clears the warning for you, and
 the cask can be installed next to the command-line one:
@@ -77,7 +65,29 @@ Or download a file from the
   GTK 4 and WebKitGTK 6.0 (the packages `libgtk-4-1` and
   `libwebkitgtk-6.0-4`). This build has not been tested.
 
-### Build from source
+### Command-line tool
+
+#### Homebrew (macOS / Linux)
+
+    brew install --cask capybara-translation/tap/lanxfer
+
+To upgrade to the latest release:
+
+    brew upgrade --cask capybara-translation/tap/lanxfer
+
+#### go install
+
+    go install github.com/capybara-translation/lanxfer/cmd/lanxfer@latest
+
+#### Pre-built binaries
+
+Download the archive for your platform from the
+[Releases page](https://github.com/capybara-translation/lanxfer/releases)
+(`tar.gz` for macOS/Linux, `zip` for Windows) and put the `lanxfer` binary
+somewhere on your `PATH`. `checksums.txt` on the same page lists the SHA-256
+of every command-line archive.
+
+#### Build from source
 
     git clone https://github.com/capybara-translation/lanxfer.git
     cd lanxfer
@@ -87,7 +97,7 @@ Requires the Go version declared in `go.mod`. The command-line tool has no
 third-party dependencies. The desktop app in `gui/` is a separate Go module
 with its own dependencies; see [GUI](#gui).
 
-### What `lanxfer --version` prints
+#### What `lanxfer --version` prints
 
 | How you installed | Output |
 |---|---|
