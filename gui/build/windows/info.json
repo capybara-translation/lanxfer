@@ -1,10 +1,10 @@
 {
 	"fixed": {
-		"file_version": "0.1.0"
+		"file_version": "0.0.0.0"
 	},
 	"info": {
 		"0409": {
-			"ProductVersion": "0.1.0",
+			"ProductVersion": "0.0.0-dev",
 			"CompanyName": "capybara-translation",
 			"FileDescription": "Send files and messages to other machines on the LAN",
 			"LegalCopyright": "© 2026, capybara-translation",

@@ -13,8 +13,9 @@ drag and drop is built from the same code; see [GUI](#gui).
 
 Early but usable: file and folder transfer with progress display, short text
 messages, automatic peer discovery with a remembered peer list, sending by
-name, and a history of what was sent and received. A desktop app (GUI) is
-being added; there is no pre-built download yet. No encryption yet.
+name, and a history of what was sent and received. A desktop app (GUI) for
+macOS and Windows is available as a download; see
+[Desktop app](#desktop-app). No encryption yet.
 
 ## Install
 
@@ -36,7 +37,41 @@ Download the archive for your platform from the
 [Releases page](https://github.com/capybara-translation/lanxfer/releases)
 (`tar.gz` for macOS/Linux, `zip` for Windows) and put the `lanxfer` binary
 somewhere on your `PATH`. `checksums.txt` on the same page lists the SHA-256
-of every archive.
+of every command-line archive.
+
+### Desktop app
+
+The app in [GUI](#gui) comes from the same Releases page. It is not signed
+or notarized yet, so macOS and Windows warn before the first launch.
+
+On macOS, Homebrew is the easiest way. It clears the warning for you, and
+the cask can be installed next to the command-line one:
+
+    brew install --cask capybara-translation/tap/lanxfer-app
+
+To upgrade to the latest release:
+
+    brew upgrade --cask capybara-translation/tap/lanxfer-app
+
+Or download a file from the
+[Releases page](https://github.com/capybara-translation/lanxfer/releases).
+`lanxfer-app_checksums.txt` on the same page lists their SHA-256.
+
+- **macOS** (12 or later, Apple silicon and Intel):
+  `lanxfer-app_darwin_universal.zip`. Unzip it and move `lanxfer.app` to
+  Applications. Before the first launch, clear the download mark that
+  macOS puts on it, or macOS refuses to open the app:
+
+      xattr -cr /Applications/lanxfer.app
+
+- **Windows** (64-bit): `lanxfer-app_windows_amd64.zip`. Unzip it and run
+  `lanxfer.exe`. SmartScreen shows "Windows protected your PC": click
+  "More info", then "Run anyway". The app needs the Microsoft WebView2
+  runtime, which current Windows 10 and 11 already have.
+- **Linux** (64-bit): `lanxfer-app_linux_amd64.tar.gz`. Extract it and run
+  `lanxfer`. It needs Ubuntu 24.04 or later, or Debian 13 or later, with
+  GTK 4 and WebKitGTK 6.0 (the packages `libgtk-4-1` and
+  `libwebkitgtk-6.0-4`). This build has not been tested.
 
 ### Build from source
 
@@ -62,8 +97,8 @@ with its own dependencies; see [GUI](#gui).
 ## GUI
 
 The desktop app is a window and a menu bar (system tray) icon around the same
-receiver that `lanxfer recv` runs. There is no pre-built app yet; build it
-from source as described below.
+receiver that `lanxfer recv` runs. Download it as described in
+[Desktop app](#desktop-app), or build it from source as described below.
 
 - The left side lists the receivers on your network. Pick one to open its
   chat.
@@ -112,7 +147,8 @@ Linux:
 
     wails3 task windows:build ARCH=amd64
 
-The app has been run on macOS and Windows. Linux has not been compiled or run.
+The app has been run on macOS and Windows. Linux is compiled by the checks
+on every change, but the app has never been run there.
 
 ### Notifications
 
@@ -523,7 +559,7 @@ deliberate attacker.) Responses: `204` recorded, `400` invalid entry,
 4. ~~Send short text between machines (`lanxfer say mac2 "hello"`)~~
 5. ~~Progress display and cancellation~~
 6. ~~Directory transfer~~
-7. GUI with drag and drop
+7. ~~GUI with drag and drop~~
 8. Device pairing and TLS
 
 ## License

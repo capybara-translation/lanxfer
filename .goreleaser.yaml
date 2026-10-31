@@ -29,6 +29,10 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+release:
+  # A tag with a suffix such as v1.2.3-rc.1 is published as a prerelease.
+  prerelease: auto
+
 # homebrew_casks replaces the deprecated brews section for pre-built binaries.
 homebrew_casks:
   - repository:
@@ -36,6 +40,8 @@ homebrew_casks:
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    # Leave the tap alone for a prerelease tag such as v1.2.3-rc.1.
+    skip_upload: auto
     homepage: "https://github.com/capybara-translation/lanxfer"
     description: "Send files directly between machines on your LAN"
     license: "MIT"

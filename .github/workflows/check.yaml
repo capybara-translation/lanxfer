@@ -49,3 +49,93 @@ jobs:
         with:
           version: "~> v2"
           args: release --snapshot --clean --skip=publish
+
+  # The desktop app in gui/ is a separate Go module, so the jobs above do not
+  # cover it. macOS is a supported platform and runs the frontend checks too.
+  # Each job ends by running gui/scripts/build-release.sh, the script the
+  # release workflow uses, with a dummy tag, so a change that breaks the
+  # release build is caught here and not on the day of a release. Nothing is
+  # uploaded.
+  gui-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Latest patch release, as in the release workflow.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          check-latest: true
+          cache-dependency-path: gui/go.sum
+
+      # Satisfies the engines of vite in gui/frontend/package.json
+      # (^20.19.0 || >=22.12.0).
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+
+      - run: npm ci
+        working-directory: gui/frontend
+
+      # The generated bindings are not tracked; the frontend imports them.
+      - run: wails3 generate bindings -clean=true -ts -i
+        working-directory: gui
+
+      - run: npm run build
+        working-directory: gui/frontend
+
+      - run: npm run check
+        working-directory: gui/frontend
+
+      - run: go vet ./...
+        working-directory: gui
+
+      - run: go test ./...
+        working-directory: gui
+
+      - name: Build the release app
+        run: gui/scripts/build-release.sh macos v0.0.0 "$RUNNER_TEMP/dist"
+
+  # Linux is not tested by hand; this job is the only thing that compiles it.
+  gui-ubuntu:
+    # Pinned: the package names below are those of Ubuntu 24.04, whose GTK 4
+    # is new enough for the Wails Linux backend.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          check-latest: true
+          cache-dependency-path: gui/go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      # Wails v3.0.0 builds against GTK 4 and WebKitGTK 6.0 on Linux.
+      - name: Install the Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
+
+      - run: go vet ./...
+        working-directory: gui
+
+      - run: go build ./...
+        working-directory: gui
+
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+
+      - name: Build the release apps
+        run: |
+          gui/scripts/build-release.sh windows v0.0.0 "$RUNNER_TEMP/dist"
+          gui/scripts/build-release.sh linux v0.0.0 "$RUNNER_TEMP/dist"

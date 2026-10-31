@@ -46,3 +46,171 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  # The desktop app (gui/) is built and attached after the CLI release exists.
+  # If one of these jobs fails, the CLI release stays published: use "Re-run
+  # failed jobs". Uploads use --clobber, so the files are simply replaced.
+  # Re-run gui-tap only for the newest release: for an older tag it would put
+  # the old version back into the tap.
+  # Build jobs only read the repository and hand their files over as workflow
+  # artifacts; only gui-upload may write to the release. check.yaml runs the
+  # same gui/scripts/build-release.sh with a dummy tag.
+  gui-macos:
+    needs: release
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # Latest patch release, so the app does not ship an old standard library.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          check-latest: true
+          cache-dependency-path: gui/go.sum
+
+      # Satisfies the engines of vite in gui/frontend/package.json
+      # (^20.19.0 || >=22.12.0).
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+
+      - name: Build the universal app
+        env:
+          TAG: ${{ github.ref_name }}
+        run: gui/scripts/build-release.sh macos "$TAG" "$RUNNER_TEMP/dist"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gui-macos
+          path: ${{ runner.temp }}/dist/lanxfer-app_darwin_universal.zip
+          if-no-files-found: error
+
+  gui-ubuntu:
+    needs: release
+    # Pinned: the package names below are those of Ubuntu 24.04, whose GTK 4
+    # is new enough for the Wails Linux backend.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          check-latest: true
+          cache-dependency-path: gui/go.sum
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+
+      # Wails v3.0.0 builds against GTK 4 and WebKitGTK 6.0 on Linux. Binding
+      # generation compiles the app for the host, so these are needed for the
+      # Windows build as well.
+      - name: Install the Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev libx11-dev
+
+      - run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+
+      # Windows is cross-compiled; it needs no C compiler.
+      - name: Build the Windows and Linux apps
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          gui/scripts/build-release.sh windows "$TAG" "$RUNNER_TEMP/dist"
+          gui/scripts/build-release.sh linux "$TAG" "$RUNNER_TEMP/dist"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gui-ubuntu
+          path: |
+            ${{ runner.temp }}/dist/lanxfer-app_windows_amd64.zip
+            ${{ runner.temp }}/dist/lanxfer-app_linux_amd64.tar.gz
+          if-no-files-found: error
+
+  gui-upload:
+    needs: [gui-macos, gui-ubuntu]
+    runs-on: ubuntu-latest
+    permissions:
+      # Attach files to the release that goreleaser created.
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Write the checksums
+        working-directory: assets
+        run: sha256sum lanxfer-app_* >lanxfer-app_checksums.txt && cat lanxfer-app_checksums.txt
+
+      # A prerelease tag (v1.2.3-rc.1) is uploaded as well: goreleaser marks
+      # its release as a prerelease, so it is not "latest" for GitHub, and
+      # gui-tap below leaves Homebrew alone.
+      - name: Upload to the release
+        working-directory: assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        # --clobber replaces files from an earlier run of this workflow.
+        run: gh release upload "$TAG" lanxfer-app_* --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Updates the cask in the Homebrew tap. Skipped for a prerelease tag; the
+  # CLI cask is skipped for the same tags by skip_upload: auto in
+  # .goreleaser.yaml. Do not re-run this job for an older tag: it would
+  # replace the current cask with that version.
+  gui-tap:
+    needs: gui-upload
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # Hash the published file itself: it is what Homebrew will download.
+      - name: Render the cask
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/app.zip" \
+            "https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/lanxfer-app_darwin_universal.zip"
+          sha256=$(sha256sum "$RUNNER_TEMP/app.zip" | cut -d' ' -f1)
+          gui/scripts/render-cask.sh "$TAG" "$sha256" "$RUNNER_TEMP/lanxfer-app.rb"
+
+      # The only step that sees the tap token.
+      - name: Push the cask to the tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/capybara-translation/homebrew-tap.git" \
+            "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          mkdir -p Casks
+          cp "$RUNNER_TEMP/lanxfer-app.rb" Casks/lanxfer-app.rb
+          git add Casks/lanxfer-app.rb
+          # A re-run of the same release renders the same file.
+          if git diff --cached --quiet; then
+            echo "Casks/lanxfer-app.rb is already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "lanxfer-app $version"
+          # goreleaser may have pushed the CLI cask in the meantime.
+          git push origin HEAD:main || { git pull --rebase origin main && git push origin HEAD:main; }
