@@ -131,10 +131,11 @@ received item in its folder and never opens it, so a received program or
 no authentication and no encryption (see [Security notes](#security-notes)).
 
 On macOS the app marks what it receives as downloaded (the quarantine
-attribute). macOS then asks before opening a received app and runs its usual
-checks on it. An unsigned app received this way will not open until you clear
-the mark with `xattr -cr <path>` or open it once with right-click, Open. The
-CLI (`lanxfer recv`) and the Windows app do not mark received files.
+attribute), so macOS applies its usual checks before a received app opens.
+macOS may refuse an unsigned app received this way. To open one you trust,
+clear the mark with `xattr -cr <path>`, or allow it in System Settings under
+Privacy & Security. The CLI (`lanxfer recv`) and the Windows app do not mark
+received files.
 
 ## Usage
 
