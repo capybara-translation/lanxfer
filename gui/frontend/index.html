@@ -5,18 +5,62 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     <meta name="color-scheme" content="light dark"/>
     <title>lanxfer</title>
-    <style>
-        body {
-            margin: 0;
-            padding: 24px;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            font-size: 14px;
-        }
-    </style>
 </head>
-<body>
-<p id="status">Starting...</p>
-<p id="peers">Peers: 0</p>
+<body data-file-drop-target>
+<div id="app">
+    <div id="topbar" class="topbar" role="alert" hidden>
+        <span id="topbar-message"></span>
+        <button id="topbar-retry" type="button">Retry</button>
+    </div>
+    <div id="main">
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-head">
+                <span class="label">Peers</span>
+                <button id="settings-open" class="icon-button" type="button" title="Settings" aria-label="Settings">&#9881;</button>
+            </div>
+            <div id="peer-list" class="peer-list"></div>
+        </aside>
+        <section id="chat-column" class="chat-column">
+            <div id="chat-placeholder" class="chat-placeholder">Select a peer on the left.</div>
+            <div id="chat-pane" class="chat-pane none">
+                <header class="chat-header">
+                    <span id="chat-title" class="chat-title" dir="auto"></span>
+                    <span id="chat-addr" class="chat-addr"></span>
+                    <span id="chat-status" class="chat-status"></span>
+                </header>
+                <div id="messages" class="messages"></div>
+                <footer class="composer">
+                    <textarea id="composer-input" rows="3" spellcheck="false" dir="auto"></textarea>
+                    <div class="composer-row">
+                        <span id="composer-hint" class="composer-hint"></span>
+                        <button id="composer-send" type="button">Send</button>
+                    </div>
+                </footer>
+            </div>
+        </section>
+    </div>
+</div>
+
+<div id="drop-overlay" class="drop-overlay" aria-hidden="true"><span id="drop-text"></span></div>
+<div id="toast" class="toast" role="status"></div>
+
+<div id="settings-overlay" class="overlay" hidden>
+    <form id="settings-form" class="dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <h2 id="settings-title">Settings</h2>
+        <label>Name
+            <input id="settings-name" type="text" autocomplete="off" spellcheck="false"/>
+        </label>
+        <label>Save folder
+            <input id="settings-savedir" type="text" autocomplete="off" spellcheck="false"/>
+        </label>
+        <p class="dialog-note">Saving restarts the receiver and cancels sends in progress.</p>
+        <p id="settings-error" class="dialog-error" role="alert"></p>
+        <div class="dialog-buttons">
+            <button id="settings-close" type="button">Close</button>
+            <button id="settings-save" type="submit" class="primary">Save</button>
+        </div>
+    </form>
+</div>
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>
