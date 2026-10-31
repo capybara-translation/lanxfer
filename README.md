@@ -120,8 +120,9 @@ always shown next to its IP address.
 While `lanxfer recv` runs, it keeps a list of the receivers it has seen and
 saves it, so the list survives a restart (everyone is offline until heard
 from again). `lanxfer peers` shows that list when a `recv` runs on the same
-machine, including peers that are offline. Without one it broadcasts a query
-and shows only the receivers that answer, all as online.
+machine, including peers that are offline. Without one, or while its list is
+still empty, it broadcasts a query, waits for `--wait`, and shows only the
+receivers that answer, all as online.
 
 A newly started receiver is learned by the others within about a minute. One
 that has stopped is shown as offline after about two minutes. A peer's name
@@ -139,8 +140,8 @@ When you send by name, the local `recv`'s list is used first:
   with `<name> is offline (last seen ...)`.
 - If several online peers have the name, the send fails and lists their
   addresses; send to one of them by IP address.
-- A name that is not in the list, or no `recv` on this machine, falls back
-  to a broadcast search.
+- A name that is not in the list falls back to a broadcast search, as does
+  any name when there is no `recv` on this machine or its list is empty.
 
 So once a receiver has been seen, sending by name keeps working even while
 broadcasts do not get through.
@@ -213,7 +214,8 @@ Built-in protections:
   text as received, so a program that displays it must do the same.
 - The local API (see Protocol) answers only requests from a loopback address
   with a loopback `Host` header, so other machines and DNS-rebinding web
-  pages cannot use it. Any program on the same machine can.
+  pages cannot use it. Any program on the same machine can read the peer
+  list; recording a send also takes the device ID.
 - Discovery packets reveal only the receiver's name, port, OS, and device
   ID, and are sent only to private, link-local, or loopback addresses.
 
