@@ -2,6 +2,8 @@
 // user must read, such as why dropped files were not sent; a toast would be
 // gone in a few seconds.
 
+import {cleanText} from "./format.js";
+
 export class Notice {
     constructor(
         private bar: HTMLElement,
@@ -13,7 +15,8 @@ export class Notice {
     }
 
     show(text: string): void {
-        this.message.textContent = text;
+        // The text may quote a peer name or a remote error.
+        this.message.textContent = cleanText(text);
         this.bar.hidden = false;
     }
 

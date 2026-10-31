@@ -2,7 +2,7 @@
 
 import type {Summary} from "./api.js";
 import {el, setText} from "./dom.js";
-import {formatRelative, parseTime} from "./format.js";
+import {cleanLabel, formatRelative, parseTime} from "./format.js";
 import type {Store} from "./state.js";
 
 interface Row {
@@ -81,11 +81,11 @@ export class PeerList {
         row.root.setAttribute("aria-current", s.Key === this.store.selectedKey ? "true" : "false");
         setText(row.mark, s.Online ? "●" : "○");
         row.mark.title = s.Online ? "Online" : "Offline";
-        setText(row.name, s.Name);
-        setText(row.os, s.OS);
+        setText(row.name, cleanLabel(s.Name));
+        setText(row.os, cleanLabel(s.OS));
         setText(row.badge, s.Unread > 0 ? (s.Unread > 99 ? "99+" : String(s.Unread)) : "");
         row.badge.hidden = s.Unread <= 0;
-        setText(row.preview, s.Preview);
+        setText(row.preview, cleanLabel(s.Preview));
         row.preview.hidden = s.Preview === "";
         if (s.Online) {
             setText(row.seen, "");

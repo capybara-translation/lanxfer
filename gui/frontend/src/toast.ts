@@ -1,6 +1,8 @@
 // A brief message at the bottom of the window, for errors and for dropped
 // files that were not sent.
 
+import {cleanText} from "./format.js";
+
 const SHOW_MS = 6000;
 
 export class Toast {
@@ -12,7 +14,8 @@ export class Toast {
     }
 
     show(text: string): void {
-        this.node.textContent = text;
+        // The text may quote a peer name or a remote error.
+        this.node.textContent = cleanText(text);
         this.node.hidden = false;
         window.clearTimeout(this.timer);
         this.timer = window.setTimeout(() => this.hide(), SHOW_MS);

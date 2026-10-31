@@ -3,7 +3,7 @@
 // place by each progress event.
 
 import {el, setText} from "./dom.js";
-import {formatDuration, formatPercent, formatSize, formatSpeed, percent, plural} from "./format.js";
+import {cleanLabel, formatDuration, formatPercent, formatSize, formatSpeed, percent, plural} from "./format.js";
 import type {Card} from "./transfers.js";
 
 // With no update for this long, the speed is no longer shown: the send is
@@ -42,7 +42,7 @@ export class CardView {
         const u = card.update;
         const folder = u.Folder;
 
-        setText(this.name, u.Name + (folder ? "/" : ""));
+        setText(this.name, cleanLabel(u.Name) + (folder ? "/" : ""));
         setText(this.size, this.sizeText(card));
 
         const queued = card.updates <= 1 && !u.Done;
@@ -107,7 +107,7 @@ export class CardView {
             case "cancelled":
                 return "Cancelled";
             default:
-                return u.Error ? `Failed to send: ${u.Error}` : "Failed to send";
+                return u.Error ? `Failed to send: ${cleanLabel(u.Error)}` : "Failed to send";
         }
     }
 }

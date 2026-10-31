@@ -136,3 +136,71 @@ export function byteLength(s: string): number {
 export function plural(n: number, noun: string): string {
     return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
+
+// ---- text from other machines -----------------------------------------
+//
+// Names, messages and error texts come from another machine. They are shown
+// through textContent, so they cannot add markup, but they can still contain
+// characters that reorder what is around them: "invoice", then the
+// right-to-left override, then "fdp.exe" is drawn as "invoiceexe.pdf". These
+// helpers drop those characters for display only; the history keeps the raw
+// text. The rule matches the receiver's own (isBidiControl and sanitize in
+// internal/server/inbox.go): explicit embeddings, overrides and isolates go,
+// and so do control characters. Marks such as LRM and RLM stay, and ordinary
+// right-to-left text is untouched. Code points are compared as numbers so
+// that no escape sequence appears in the source.
+
+// isBidiControl reports whether cp is an explicit embedding, override or
+// isolate: U+202A to U+202E and U+2066 to U+2069.
+function isBidiControl(cp: number): boolean {
+    return (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069);
+}
+
+// isControl reports whether cp is a C0 or C1 control character, which is what
+// Go's unicode.IsControl reports.
+function isControl(cp: number): boolean {
+    return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f);
+}
+
+const LF = 0x0a;
+const CR = 0x0d;
+const TAB = 0x09;
+const LINE_SEP = 0x2028;
+const PARA_SEP = 0x2029;
+
+// cleanText cleans message text for display: bidirectional controls and
+// control characters are removed, except newline and tab. CR LF counts as a
+// newline, and a lone CR is dropped.
+export function cleanText(s: string): string {
+    let out = "";
+    let changed = false;
+    for (const ch of s) {
+        const cp = ch.codePointAt(0) as number;
+        if (cp === LF || cp === TAB || (!isControl(cp) && !isBidiControl(cp))) {
+            out += ch;
+        } else {
+            changed = true;
+        }
+    }
+    return changed ? out : s;
+}
+
+// cleanLabel cleans text shown on one line, such as a name or a path: line
+// breaks, tabs and the Unicode line and paragraph separators become spaces,
+// and bidirectional controls and other control characters are removed.
+export function cleanLabel(s: string): string {
+    let out = "";
+    let changed = false;
+    for (const ch of s) {
+        const cp = ch.codePointAt(0) as number;
+        if (cp === LF || cp === CR || cp === TAB || cp === LINE_SEP || cp === PARA_SEP) {
+            out += " ";
+            changed = true;
+        } else if (isControl(cp) || isBidiControl(cp)) {
+            changed = true;
+        } else {
+            out += ch;
+        }
+    }
+    return changed ? out : s;
+}

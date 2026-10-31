@@ -2,6 +2,7 @@
 // state. Modules read it and register listeners; main.ts feeds it.
 
 import type {NodeState, Summary} from "./api.js";
+import {cleanLabel} from "./format.js";
 
 type Listener = () => void;
 
@@ -98,9 +99,10 @@ export class Store {
         return this.selectedKey !== "" && this.row(this.selectedKey) !== undefined;
     }
 
-    // selectedName is the name to show for the open chat.
+    // selectedName is the name to show for the open chat. The peer chose it,
+    // so it is cleaned of direction controls.
     selectedName(): string {
         const row = this.row(this.selectedKey) ?? this.selectedRow;
-        return row ? row.Name : "";
+        return row ? cleanLabel(row.Name) : "";
     }
 }

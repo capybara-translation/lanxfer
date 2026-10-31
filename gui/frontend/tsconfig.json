@@ -4,6 +4,7 @@
     "target": "ES2022",
 
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
 
     "module": "ESNext",

@@ -1,10 +1,12 @@
 // Renders one history entry: a text bubble, or a file or folder card.
 // Entries come raw from other machines. Every value goes through textContent
 // (see dom.ts); text is not interpreted, and links are not made clickable.
+// What a peer wrote is also cleaned of direction controls (see format.ts); the
+// history itself stays raw.
 
 import type {Entry} from "./api.js";
 import {el} from "./dom.js";
-import {formatClock, formatSize, parseTime, plural} from "./format.js";
+import {cleanLabel, cleanText, formatClock, formatSize, parseTime, plural} from "./format.js";
 import {revealLabel, type OS} from "./platform.js";
 
 export interface EntryContext {
@@ -31,7 +33,7 @@ function timeNode(e: Entry): HTMLElement {
 }
 
 function renderText(e: Entry): HTMLElement {
-    const bubble = el("div", {cls: "bubble-text", text: e.text ?? "", attrs: {dir: "auto"}});
+    const bubble = el("div", {cls: "bubble-text", text: cleanText(e.text ?? ""), attrs: {dir: "auto"}});
     const root = el("div", {cls: `bubble ${side(e)}`}, bubble);
     if (e.status === "failed") {
         root.classList.add("failed");
@@ -45,7 +47,7 @@ function renderText(e: Entry): HTMLElement {
 }
 
 function failureText(e: Entry, prefix: string): string {
-    return e.error ? `${prefix}: ${e.error}` : prefix;
+    return e.error ? `${prefix}: ${cleanLabel(e.error)}` : prefix;
 }
 
 function renderItem(e: Entry, ctx: EntryContext): HTMLElement {
@@ -53,7 +55,7 @@ function renderItem(e: Entry, ctx: EntryContext): HTMLElement {
     const size = e.size ?? 0;
     const head = el("div", {cls: "card-head"});
     head.appendChild(el("span", {cls: "card-icon", text: folder ? "📁" : "📄"}));
-    head.appendChild(el("span", {cls: "card-name", text: (e.name || e.saved_as || "(unnamed)") + (folder ? "/" : ""), attrs: {dir: "auto"}}));
+    head.appendChild(el("span", {cls: "card-name", text: cleanLabel(e.name || e.saved_as || "(unnamed)") + (folder ? "/" : ""), attrs: {dir: "auto"}}));
     const detail = folder ? `${plural(e.files ?? 0, "file")} · ${formatSize(size)}` : formatSize(size);
     head.appendChild(el("span", {cls: "card-size", text: detail}));
 
@@ -83,12 +85,13 @@ function renderItem(e: Entry, ctx: EntryContext): HTMLElement {
     root.appendChild(line);
 
     if (e.status === "ok" && out && e.saved_as && e.saved_as !== e.name) {
-        root.appendChild(el("div", {cls: "card-path", text: `Saved there as ${e.saved_as}`, attrs: {dir: "auto"}}));
+        root.appendChild(el("div", {cls: "card-path", text: `Saved there as ${cleanLabel(e.saved_as)}`, attrs: {dir: "auto"}}));
     }
     if (e.path && e.status === "ok") {
         const where = el("div", {cls: "card-where"});
-        const pathText = out ? `From ${e.path}` : `Saved to ${e.path}`;
-        where.appendChild(el("span", {cls: "card-path", text: pathText, attrs: {title: e.path, dir: "auto"}}));
+        const shown = cleanLabel(e.path);
+        const pathText = out ? `From ${shown}` : `Saved to ${shown}`;
+        where.appendChild(el("span", {cls: "card-path", text: pathText, attrs: {title: shown, dir: "auto"}}));
         const button = el("button", {cls: "link", text: revealLabel(ctx.os), attrs: {type: "button"}});
         const path = e.path;
         button.addEventListener("click", () => ctx.reveal(path));
