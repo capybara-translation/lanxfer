@@ -10,6 +10,7 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -65,8 +66,12 @@ type Config struct {
 	// of a send.
 	OnUnrecorded func(peerKey string, e history.Entry)
 	// OnUpdate receives every update. For one item the calls are serialized,
-	// in order, and none follows its Done update. It is never called with a
-	// Manager lock held, so it may call the Manager.
+	// in order, and none follows its Done update. To guarantee that, a lock
+	// of that item is held during the call (no Manager lock is held, and
+	// Cancel and SendPaths do not need the item's lock, so the callback may
+	// call them). It must return quickly, because a slow callback holds up
+	// the item's transfer, and it must not call Close, which waits for the
+	// goroutine that is running the callback.
 	OnUpdate func(peerKey string, u Update)
 }
 
@@ -77,6 +82,8 @@ type Manager struct {
 	ctx  context.Context  // cancelled by Close
 	stop context.CancelFunc
 	wg   sync.WaitGroup
+
+	prefix string // makes IDs unique across Managers
 
 	mu     sync.Mutex
 	closed bool
@@ -108,11 +115,12 @@ func New(cfg Config) *Manager {
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	return &Manager{
-		cfg:   cfg,
-		now:   time.Now,
-		ctx:   ctx,
-		stop:  stop,
-		items: make(map[string]*item),
+		prefix: strconv.FormatInt(time.Now().UnixNano(), 36),
+		cfg:    cfg,
+		now:    time.Now,
+		ctx:    ctx,
+		stop:   stop,
+		items:  make(map[string]*item),
 	}
 }
 
@@ -156,7 +164,7 @@ func (m *Manager) SendPaths(peerKey string, p presence.Peer, paths []string) []s
 	ids := make([]string, len(paths))
 	for i, path := range paths {
 		m.seq++
-		it := &item{id: fmt.Sprintf("t%d", m.seq), path: path}
+		it := &item{id: fmt.Sprintf("t%s-%d", m.prefix, m.seq), path: path}
 		it.base = Update{ID: it.id, Name: filepath.Base(path)}
 		m.items[it.id] = it
 		items[i], ids[i] = it, it.id
@@ -233,7 +241,7 @@ func (m *Manager) start(it *item) (context.Context, context.CancelFunc) {
 
 // process sends one item and reports its outcome.
 func (m *Manager) process(peerKey string, p presence.Peer, it *item, loc *locator) {
-	abs := absPath(it.path)
+	abs := AbsPath(it.path)
 	name := filepath.Base(it.path)
 	fallback := peerTarget(p)
 
@@ -277,7 +285,10 @@ func (m *Manager) send(ctx context.Context, peerKey string, p presence.Peer, it 
 	total := info.Size()
 	base := Update{ID: it.id, Name: name}
 	if info.IsDir() {
-		if plan, err = client.ScanDir(it.path); err != nil {
+		// Show a folder card while the scan runs.
+		base.Folder = true
+		m.begin(peerKey, it, base)
+		if plan, err = client.ScanDir(ctx, it.path); err != nil {
 			e := Entry(ctx, fallback, abs, name, 0, nil, nil, err)
 			e.Kind = history.KindFolder
 			return e
@@ -415,9 +426,10 @@ func peerTarget(p presence.Peer) target.Target {
 	return target.Target{Addr: p.Addr, ID: p.ID, Name: p.Name}
 }
 
-// absPath returns path as an absolute path, or path itself when it cannot be
-// made absolute.
-func absPath(path string) string {
+// AbsPath returns path as an absolute path, or path itself when it cannot be
+// made absolute. The command line and the GUI both store it as the source
+// path of a send.
+func AbsPath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		return abs
 	}

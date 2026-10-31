@@ -18,7 +18,7 @@ func Entry(ctx context.Context, tg target.Target, path, name string, size int64,
 		Dir:      history.Out,
 		PeerID:   tg.ID,
 		PeerName: tg.Name,
-		PeerAddr: tg.Addr.Addr().String(),
+		PeerAddr: peerAddr(tg),
 		Kind:     history.KindFile,
 		Name:     name,
 		Path:     path,
@@ -38,12 +38,21 @@ func TextEntry(ctx context.Context, tg target.Target, text string, res *client.R
 		Dir:      history.Out,
 		PeerID:   tg.ID,
 		PeerName: tg.Name,
-		PeerAddr: tg.Addr.Addr().String(),
+		PeerAddr: peerAddr(tg),
 		Kind:     history.KindText,
 		Text:     text,
 	}
 	fillOutcome(ctx, &e, res, err)
 	return e
+}
+
+// peerAddr is the IP of tg for the history, or "" when tg has no valid
+// address (a peer-list entry without one), so "invalid IP" is never stored.
+func peerAddr(tg target.Target) string {
+	if !tg.Addr.IsValid() {
+		return ""
+	}
+	return tg.Addr.Addr().String()
 }
 
 // fillOutcome sets the result fields of e. The receiver's own ID, when its

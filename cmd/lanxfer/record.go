@@ -60,12 +60,3 @@ func appendHistory(e history.Entry) error {
 	}
 	return history.Open(filepath.Join(dir, "history.jsonl")).Append(e)
 }
-
-// absPath returns path as an absolute path, or path itself when it cannot be
-// made absolute.
-func absPath(path string) string {
-	if abs, err := filepath.Abs(path); err == nil {
-		return abs
-	}
-	return path
-}

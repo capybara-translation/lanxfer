@@ -78,7 +78,9 @@ func Send(ctx context.Context, host string, port int, path string, opts SendOpti
 	setSenderHeaders(req, opts)
 
 	start := time.Now()
-	resp, err := newHTTPClient().Do(req)
+	hc := newHTTPClient()
+	defer hc.CloseIdleConnections()
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send to %s: %w", u.Host, err)
 	}

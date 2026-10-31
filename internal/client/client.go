@@ -14,7 +14,12 @@ import (
 
 // newHTTPClient returns a client that times out only the connection
 // attempt. Client.Timeout would bound the whole exchange and cut off large
-// transfers.
+// transfers. Each call makes a new Transport that nothing else closes, so
+// the caller must defer CloseIdleConnections: otherwise the connection stays
+// open, with its goroutines, for as long as the program runs. (Keep-alives are
+// not disabled because a receiver that answers before reading the whole body,
+// such as one without folder support, would then reset the connection while
+// the sender still writes, and the answer would be lost.)
 func newHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{

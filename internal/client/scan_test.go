@@ -1,12 +1,16 @@
 package client
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // makeTree creates files (relative path -> content) and folders under dir.
@@ -61,7 +65,7 @@ func TestScanDirCollectsAndExcludes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := ScanDir(trip)
+	plan, err := ScanDir(context.Background(), trip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +98,7 @@ func TestScanDirCollectsAndExcludes(t *testing.T) {
 func TestScanDirOnlyJunk(t *testing.T) {
 	trip := filepath.Join(t.TempDir(), "trip")
 	makeTree(t, trip, map[string]string{".DS_Store": "x", "Thumbs.db": "x"})
-	plan, err := ScanDir(trip)
+	plan, err := ScanDir(context.Background(), trip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +115,7 @@ func TestScanDirPathForms(t *testing.T) {
 
 	check := func(path, wantName string) {
 		t.Helper()
-		plan, err := ScanDir(path)
+		plan, err := ScanDir(context.Background(), path)
 		if err != nil {
 			t.Fatalf("ScanDir(%q): %v", path, err)
 		}
@@ -135,13 +139,13 @@ func TestScanDirRejects(t *testing.T) {
 	}
 	dir := t.TempDir()
 	makeTree(t, dir, map[string]string{"bad/CON": "x", "file.txt": "x"})
-	if _, err := ScanDir(filepath.Join(dir, "bad")); err == nil || !strings.Contains(err.Error(), "CON") {
+	if _, err := ScanDir(context.Background(), filepath.Join(dir, "bad")); err == nil || !strings.Contains(err.Error(), "CON") {
 		t.Errorf("folder with CON: err = %v, want one naming CON", err)
 	}
-	if _, err := ScanDir(filepath.Join(dir, "file.txt")); err == nil {
+	if _, err := ScanDir(context.Background(), filepath.Join(dir, "file.txt")); err == nil {
 		t.Error("a file: want an error")
 	}
-	if _, err := ScanDir(filepath.Join(dir, "missing")); err == nil {
+	if _, err := ScanDir(context.Background(), filepath.Join(dir, "missing")); err == nil {
 		t.Error("a missing path: want an error")
 	}
 }
@@ -166,10 +170,10 @@ func TestScanDirDepthAndPathLimits(t *testing.T) {
 		return trip
 	}
 
-	if _, err := ScanDir(deepFile(t, 64)); err != nil {
+	if _, err := ScanDir(context.Background(), deepFile(t, 64)); err != nil {
 		t.Errorf("64 elements deep: %v, want accepted", err)
 	}
-	if _, err := ScanDir(deepFile(t, 65)); err == nil || !strings.Contains(err.Error(), "deeper") {
+	if _, err := ScanDir(context.Background(), deepFile(t, 65)); err == nil || !strings.Contains(err.Error(), "deeper") {
 		t.Errorf("65 elements deep: err = %v, want one saying deeper", err)
 	}
 }
@@ -221,7 +225,7 @@ func TestTarSizeMatchesWriteTar(t *testing.T) {
 		"odd.bin":  strings.Repeat("x", 1000),
 		"empty/":   "",
 	})
-	plan, err := ScanDir(trip)
+	plan, err := ScanDir(context.Background(), trip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +243,7 @@ func TestWriteTarDetectsChangedFiles(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			trip := filepath.Join(t.TempDir(), "trip")
 			makeTree(t, trip, map[string]string{"a.txt": "original"})
-			plan, err := ScanDir(trip)
+			plan, err := ScanDir(context.Background(), trip)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -251,5 +255,24 @@ func TestWriteTarDetectsChangedFiles(t *testing.T) {
 				t.Errorf("err = %v, want one naming a.txt", err)
 			}
 		})
+	}
+}
+
+func TestScanDirStopsWhenCancelled(t *testing.T) {
+	trip := filepath.Join(t.TempDir(), "trip")
+	for i := 0; i < 50; i++ {
+		if err := os.MkdirAll(filepath.Join(trip, fmt.Sprintf("d%02d", i)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	plan, err := ScanDir(ctx, trip)
+	if !errors.Is(err, context.Canceled) || plan != nil {
+		t.Errorf("ScanDir = %v, %v; want context.Canceled", plan, err)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("took %v", d)
 	}
 }

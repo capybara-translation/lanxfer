@@ -151,6 +151,9 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 		// Defend against clients that open a connection and never send
 		// headers (slowloris). Body transfer is not affected.
 		ReadHeaderTimeout: 10 * time.Second,
+		// Drop connections that clients keep open without using, so older
+		// clients that never close theirs do not pile up.
+		IdleTimeout: 60 * time.Second,
 	}
 	ln, err := net.Listen("tcp", srv.Addr)
 	if err != nil {

@@ -74,8 +74,9 @@ func isJunk(name string, isDir bool) bool {
 
 // ScanDir walks the folder at path and plans its transfer. It skips system
 // junk, symbolic links, and special files, and fails before anything is
-// sent if a name would be rejected by the receiver.
-func ScanDir(path string) (*DirPlan, error) {
+// sent if a name would be rejected by the receiver. Cancelling ctx stops the
+// walk and returns the context's error.
+func ScanDir(ctx context.Context, path string) (*DirPlan, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, err
@@ -101,6 +102,9 @@ func ScanDir(path string) (*DirPlan, error) {
 	plan := &DirPlan{Root: root, Name: name}
 	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if p == root {
@@ -279,7 +283,9 @@ func SendDir(ctx context.Context, host string, port int, plan *DirPlan, opts Sen
 	setSenderHeaders(req, opts)
 
 	start := time.Now()
-	resp, err := newHTTPClient().Do(req)
+	hc := newHTTPClient()
+	defer hc.CloseIdleConnections()
+	resp, err := hc.Do(req)
 	// The transport may stop reading the body early (an error, or a response
 	// sent before the upload ended). Closing the pipe unblocks the writer.
 	pr.Close()

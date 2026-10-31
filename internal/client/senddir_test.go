@@ -103,7 +103,7 @@ func compareTrees(t *testing.T, src, dst string) {
 func TestSendDirRoundtrip(t *testing.T) {
 	host, port, dir := startReceiver(t)
 	trip := buildTree(t)
-	plan, err := client.ScanDir(trip)
+	plan, err := client.ScanDir(context.Background(), trip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestSendDirRoundtrip(t *testing.T) {
 
 func TestSendDirReportsProgress(t *testing.T) {
 	host, port, _ := startReceiver(t)
-	plan, err := client.ScanDir(buildTree(t))
+	plan, err := client.ScanDir(context.Background(), buildTree(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestSendDirOldReceiver(t *testing.T) {
 	ts := httptest.NewServer(http.NotFoundHandler()) // receivers before folder support answer 404
 	t.Cleanup(ts.Close)
 	host, port := splitHostPort(t, ts.URL)
-	plan, err := client.ScanDir(buildTree(t))
+	plan, err := client.ScanDir(context.Background(), buildTree(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestSendDirCancel(t *testing.T) {
 	t.Cleanup(ts.Close)
 	t.Cleanup(func() { close(release) }) // runs before ts.Close
 	host, port := splitHostPort(t, ts.URL)
-	plan, err := client.ScanDir(buildTree(t))
+	plan, err := client.ScanDir(context.Background(), buildTree(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestSendDirUnreadableFile(t *testing.T) {
 	}
 	host, port, dir := startReceiver(t)
 	trip := buildTree(t)
-	plan, err := client.ScanDir(trip)
+	plan, err := client.ScanDir(context.Background(), trip)
 	if err != nil {
 		t.Fatal(err)
 	}

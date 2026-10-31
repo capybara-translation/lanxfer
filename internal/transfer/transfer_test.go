@@ -5,10 +5,13 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,17 +35,34 @@ const (
 // and the folder it saves into.
 func receiver(t *testing.T) (presence.Peer, string) {
 	t.Helper()
+	p, dir, _ := trackedReceiver(t)
+	return p, dir
+}
+
+// trackedReceiver is receiver that also counts the connections it holds open.
+func trackedReceiver(t *testing.T) (presence.Peer, string, *atomic.Int64) {
+	t.Helper()
 	st, err := server.NewStorage(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(server.New(st, 64<<20, server.NewInbox(nil, io.Discard), log.New(io.Discard, "", 0)).Handler())
+	var open atomic.Int64
+	ts := httptest.NewUnstartedServer(server.New(st, 64<<20, server.NewInbox(nil, io.Discard), log.New(io.Discard, "", 0)).Handler())
+	ts.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			open.Add(1)
+		case http.StateClosed, http.StateHijacked:
+			open.Add(-1)
+		}
+	}
+	ts.Start()
 	t.Cleanup(ts.Close)
 	addr, err := netip.ParseAddrPort(ts.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return presence.Peer{ID: idMac2, Name: "mac2", Addr: addr, Online: true}, st.Dir
+	return presence.Peer{ID: idMac2, Name: "mac2", Addr: addr, Online: true}, st.Dir, &open
 }
 
 // harness collects what a Manager reports.
@@ -422,12 +442,17 @@ func TestCancelQueued(t *testing.T) {
 		return target.Target{Addr: p.Addr, ID: p.ID, Name: p.Name}, nil
 	}
 	m := newManager(t, h)
+	// Registered after the Manager's Close, so it runs first and a failed
+	// assertion cannot leave Close waiting on the lookup.
+	var releaseOnce sync.Once
+	releaseLookup := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseLookup)
 	ids := m.SendPaths(peerKey, p, []string{a, b})
 
 	if !m.Cancel(ids[1]) {
 		t.Fatal("Cancel of a queued item returned false")
 	}
-	close(release)
+	releaseLookup()
 	h.wait(t, ids...)
 
 	if got := h.last(ids[0]).Status; got != history.StatusOK {
@@ -779,4 +804,107 @@ func TestEntry(t *testing.T) {
 			t.Errorf("got  %+v\nwant %+v", e, want)
 		}
 	})
+}
+
+func TestSendsLeaveNoConnectionsOrGoroutines(t *testing.T) {
+	p, _, open := trackedReceiver(t)
+	file := filepath.Join(t.TempDir(), "a.txt")
+	writeFile(t, file, 100)
+
+	runtime.GC()
+	before := runtime.NumGoroutine()
+
+	h := newHarness()
+	m := New(h.config())
+	const n = 30
+	for i := 0; i < n; i++ {
+		h.wait(t, m.SendPaths(peerKey, p, []string{file})...)
+		if err := m.SendText(peerKey, p, "hi"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m.Close()
+
+	// Connections and their goroutines wind down shortly after the last
+	// response; wait for that instead of sleeping a fixed time.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && (open.Load() > 0 || runtime.NumGoroutine() > before+5) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := open.Load(); got != 0 {
+		t.Errorf("%d connections still open after %d sends", got, 2*n)
+	}
+	if got := runtime.NumGoroutine(); got > before+5 {
+		t.Errorf("%d goroutines, started with %d", got, before)
+	}
+}
+
+func TestFolderCardShowsDuringScanAndAfterScanFailure(t *testing.T) {
+	p, _ := receiver(t)
+	// A path deeper than the receiver accepts makes the scan fail.
+	deep := filepath.Join(t.TempDir(), "deep")
+	cur := deep
+	for i := 0; i < 70; i++ {
+		cur = filepath.Join(cur, "d")
+	}
+	writeFile(t, filepath.Join(cur, "f.txt"), 1)
+
+	h := newHarness()
+	m := newManager(t, h)
+	ids := m.SendPaths(peerKey, p, []string{deep})
+	h.wait(t, ids...)
+
+	us := h.updatesFor(ids[0])
+	if len(us) < 3 || !us[1].Folder || us[1].Done {
+		t.Errorf("no folder card before the scan result: %+v", us)
+	}
+	if u := us[len(us)-1]; !u.Done || u.Status != history.StatusFailed || !u.Folder {
+		t.Errorf("done = %+v, want a failed folder", u)
+	}
+	if e := h.recorded()[0]; e.Kind != history.KindFolder || e.Status != history.StatusFailed {
+		t.Errorf("entry = %+v", e)
+	}
+}
+
+func TestPeerWithoutAddressLeavesPeerAddrEmpty(t *testing.T) {
+	h := newHarness()
+	h.locateFn = func(context.Context, presence.Peer, int) (target.Target, error) {
+		return target.Target{}, errors.New("no address")
+	}
+	m := newManager(t, h)
+	p := presence.Peer{ID: idUbuntu, Name: "ubuntu"} // zero Addr
+
+	if err := m.SendText(peerKey, p, "hi"); err == nil {
+		t.Fatal("SendText succeeded")
+	}
+	file := filepath.Join(t.TempDir(), "a.txt")
+	writeFile(t, file, 1)
+	h.wait(t, m.SendPaths(peerKey, p, []string{file})...)
+
+	entries := h.recorded()
+	if len(entries) != 2 {
+		t.Fatalf("entries = %+v", entries)
+	}
+	for _, e := range entries {
+		if e.PeerAddr != "" || e.PeerName != "ubuntu" {
+			t.Errorf("entry = %+v, want an empty PeerAddr", e)
+		}
+	}
+}
+
+func TestIDsAreUniqueAcrossManagers(t *testing.T) {
+	p, _ := receiver(t)
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		h := newHarness()
+		m := New(h.config())
+		ids := m.SendPaths(peerKey, p, []string{"/nonexistent/x"})
+		h.wait(t, ids...)
+		m.Close()
+		if seen[ids[0]] {
+			t.Fatalf("ID %s repeated", ids[0])
+		}
+		seen[ids[0]] = true
+		time.Sleep(time.Millisecond) // the prefix is the start time
+	}
 }

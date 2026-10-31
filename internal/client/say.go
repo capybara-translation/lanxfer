@@ -27,7 +27,9 @@ func Say(ctx context.Context, host string, port int, text string, opts SendOptio
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	setSenderHeaders(req, opts)
 
-	resp, err := newHTTPClient().Do(req)
+	hc := newHTTPClient()
+	defer hc.CloseIdleConnections()
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send to %s: %w", u.Host, err)
 	}

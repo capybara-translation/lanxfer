@@ -51,6 +51,12 @@ func runSend(args []string) error {
 		return fmt.Errorf("%w: %v", errUsage, err)
 	}
 
+	// Ctrl-C cancels the folder scan, the name lookup and the transfer; the
+	// receiver sees the connection drop and discards the partial file or
+	// folder.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Check the path before looking up the receiver, so a typo or an
 	// unsendable folder is reported without waiting for the network.
 	info, err := os.Stat(path)
@@ -59,15 +65,10 @@ func runSend(args []string) error {
 	}
 	var plan *client.DirPlan
 	if info.IsDir() {
-		if plan, err = client.ScanDir(path); err != nil {
-			return err
+		if plan, err = client.ScanDir(ctx, path); err != nil {
+			return interrupted(ctx, err)
 		}
 	}
-
-	// Ctrl-C cancels the name lookup and the transfer; the receiver sees
-	// the connection drop and discards the partial file or folder.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	// The ID comes first: the name lookup needs it to tell this user's own
 	// receiver from another user's. Any warning is printed before the
@@ -101,7 +102,7 @@ func runSend(args []string) error {
 		res, err = client.Send(ctx, host, hostPort, path, opts)
 	}
 	stopProgress() // erase the line before the result or the error is printed
-	recordSent(*port, selfID, transfer.Entry(ctx, tg.Target, absPath(path), name, info.Size(), plan, res, err), os.Stderr)
+	recordSent(*port, selfID, transfer.Entry(ctx, tg.Target, transfer.AbsPath(path), name, info.Size(), plan, res, err), os.Stderr)
 	if err != nil {
 		return interrupted(ctx, err)
 	}

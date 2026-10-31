@@ -76,7 +76,7 @@ var operations = map[string]func(t *testing.T, host string, port int, opts clien
 		if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		plan, err := client.ScanDir(dir)
+		plan, err := client.ScanDir(context.Background(), dir)
 		if err != nil {
 			t.Fatal(err)
 		}
