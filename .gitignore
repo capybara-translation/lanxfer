@@ -40,3 +40,13 @@ docs/superpowers
 /lanxfer-*
 dist/
 .superpowers/brainstorm/
+# GUI app (gui/ is a separate Go module; see gui/.gitignore for the rest).
+# "dist/" above also matches the frontend build output, so re-include the
+# folder and keep only the placeholder, which lets "go:embed all:frontend/dist"
+# compile without an npm build.
+!gui/frontend/dist/
+gui/frontend/dist/*
+!gui/frontend/dist/.gitkeep
+gui/bin
+gui/frontend/node_modules
+gui/frontend/bindings
