@@ -6,13 +6,15 @@ LAN, with no server in between.
 lanxfer is a small, dependency-free Go CLI. Run `lanxfer recv` on the machine
 that should receive, then `lanxfer send <name> <file-or-folder>` on the
 machine that has it. Receivers are found automatically on the local network.
-Short text can be sent the same way with `lanxfer say`.
+Short text can be sent the same way with `lanxfer say`. A desktop app with
+drag and drop is built from the same code; see [GUI](#gui).
 
 ## Status
 
 Early but usable: file and folder transfer with progress display, short text
 messages, automatic peer discovery with a remembered peer list, sending by
-name, and a history of what was sent and received. No encryption yet.
+name, and a history of what was sent and received. A desktop app (GUI) is
+being added; there is no pre-built download yet. No encryption yet.
 
 ## Install
 
@@ -42,7 +44,9 @@ of every archive.
     cd lanxfer
     go build -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty)" ./cmd/lanxfer
 
-Requires the Go version declared in `go.mod`. No third-party dependencies.
+Requires the Go version declared in `go.mod`. The command-line tool has no
+third-party dependencies. The desktop app in `gui/` is a separate Go module
+with its own dependencies; see [GUI](#gui).
 
 ### What `lanxfer --version` prints
 
@@ -54,6 +58,70 @@ Requires the Go version declared in `go.mod`. No third-party dependencies.
 | `go build` with the `ldflags` example above | whatever `git describe` resolves to |
 | Plain `go build` on a clean, tagged checkout | `lanxfer vX.Y.Z` |
 | Plain `go build` on any other checkout | `lanxfer dev` (untagged commits and uncommitted changes are hidden) |
+
+## GUI
+
+The desktop app is a window and a menu bar (system tray) icon around the same
+receiver that `lanxfer recv` runs. There is no pre-built app yet; build it
+from source as described below.
+
+- The left side lists the receivers on your network. Pick one to open its
+  chat.
+- Each peer has a chat with the history of what you sent and received,
+  including what you sent with `lanxfer send` and `lanxfer say`.
+- Drop files or folders anywhere in the window to send them to the open
+  chat. Type text and press `⌘+Enter` (`Ctrl+Enter` on Windows and Linux) to
+  send it.
+- Each transfer shows its progress and a Cancel button.
+- A file, folder, or message that arrives raises a notification, unless you
+  are already looking at that chat.
+- Closing the window only hides it: the app keeps receiving. The tray icon
+  offers `Open lanxfer`, `Open Save Folder`, and `Quit`; Quit stops the
+  receiver.
+- Settings sets the name other machines see and the save folder.
+
+The app uses the same config folder as the CLI (see
+[Peers and history](#peers-and-history)), so it shares the device ID and the
+history. Its own settings are in `gui.json` there. It listens on port `8425`
+like `lanxfer recv`, so the two cannot run on one machine at the same time.
+If the port is taken, the app shows `Not receiving` with a Retry button;
+sending still works. For development, the environment variable
+`LANXFER_PORT` moves the app to another port.
+
+### Build the app
+
+The app uses [Wails](https://wails.io) v3.0.0. It needs Go 1.26 or later,
+Node.js 20.19 or later (or 22.12 or later) with npm, and the build tools
+of your platform (on macOS, the Xcode command line tools). Install the
+`wails3` tool, then package the app from the `gui` folder:
+
+    go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+    cd gui
+    wails3 task darwin:package
+
+This builds the web frontend and writes `gui/bin/lanxfer.app`, signed ad hoc
+for local use. Use `windows:package` or `linux:package` instead of
+`darwin:package` on those systems. `wails3 doctor` checks that the
+prerequisites are installed.
+
+### Notifications
+
+On Windows and Linux, notifications come from the system. On macOS the app
+shows its own small window in the corner of the screen instead of using
+Notification Center: macOS refuses its notification API to an app that is
+not signed with a developer certificate. Clicking a notification opens that
+chat.
+
+Only macOS has been run so far. The Windows and Linux builds compile, but
+the app has not been run on either.
+
+### GUI security notes
+
+Names and messages from other machines are shown as text only, never as
+HTML. `Show in Finder` (`Show in Explorer`, `Show in Folder`) reveals a
+received item in its folder and never opens it, so a received program or
+`.app` is not run by accident. The app has the same trust model as the CLI:
+no authentication and no encryption (see [Security notes](#security-notes)).
 
 ## Usage
 
