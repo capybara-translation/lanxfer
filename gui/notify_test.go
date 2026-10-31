@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -652,4 +654,45 @@ func TestServiceNotifyIsOptional(t *testing.T) {
 	text.Text = "x"
 	s.app.cfg.OnEvent(node.Event{Entry: &text})
 	barrier(t, s, em)
+}
+
+// A page that reloads starts with nothing selected and says so with
+// OpenChat(""). Both sides must then agree: a drop has no target, an arrival
+// counts as unread, and a focused window is still notified.
+func TestOpenChatEmptyClearsTheOpenChat(t *testing.T) {
+	s, em, _ := newTestService(t, svcOpts{})
+	rec := &recordingNotifier{}
+	s.setNotifier(rec, func() bool { return true })
+
+	s.app.cfg.OnEvent(node.Event{Peers: []presence.Peer{testPeer}})
+	barrier(t, s, em)
+	s.OpenChat(testPeerKey)
+	s.OpenChat("")
+
+	s.mu.Lock()
+	open := s.openKey
+	s.mu.Unlock()
+	if open != "" {
+		t.Errorf("openKey = %q, want empty", open)
+	}
+
+	f := filepath.Join(t.TempDir(), "f.txt")
+	if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.drop([]string{f})
+	if n := len(em.all(eventDropIgnored)); n != 1 {
+		t.Errorf("drop-ignored events = %d, want 1: a drop must not go to the chat that was open", n)
+	}
+
+	text := incoming(history.KindText)
+	text.Text = "after the reload"
+	s.app.cfg.OnEvent(node.Event{Entry: &text})
+	barrier(t, s, em)
+	if got := s.Chats(); len(got) != 1 || got[0].Unread != 1 {
+		t.Errorf("Chats = %+v, want one unread", got)
+	}
+	if got := rec.all(); len(got) != 1 {
+		t.Errorf("notifications for a focused window with nothing open = %+v, want one", got)
+	}
 }

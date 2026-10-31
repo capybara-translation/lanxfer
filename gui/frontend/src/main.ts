@@ -16,6 +16,18 @@ import {TopBar} from "./topbar.js";
 import {LiveTransfers} from "./transfers.js";
 import "./style.css";
 
+// A reload (the View menu's Reload, or the web process being restarted) leaves
+// Go with the chat that was open while this page starts with none. Tell Go
+// that nothing is selected before anything is shown, so a drop, the unread
+// counts and the notifications follow what the page shows. A failure is
+// logged and startup goes on: the worst case is the stale chat until the user
+// picks one.
+try {
+    await api.openChat("");
+} catch (err) {
+    console.error(`Could not clear the open chat: ${errorText(err)}`);
+}
+
 const os = currentOS();
 const store = new Store();
 const live = new LiveTransfers();
