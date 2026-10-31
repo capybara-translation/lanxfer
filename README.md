@@ -103,9 +103,16 @@ of your platform (on macOS, the Xcode command line tools). Install the
     wails3 task darwin:package
 
 This builds the web frontend and writes `gui/bin/lanxfer.app`, signed ad hoc
-for local use. Use `windows:package` or `linux:package` instead of
-`darwin:package` on those systems. `wails3 doctor` checks that the
-prerequisites are installed.
+for local use. Use `linux:package` instead of `darwin:package` on Linux.
+`wails3 doctor` checks that the prerequisites are installed.
+
+For Windows, this writes `gui/bin/lanxfer.exe`, a single file you can copy to
+the machine and run. It needs no C compiler, so it also works on macOS and
+Linux:
+
+    wails3 task windows:build ARCH=amd64
+
+The app has been run on macOS and Windows. Linux has not been compiled or run.
 
 ### Notifications
 
@@ -114,9 +121,6 @@ shows its own small window in the corner of the screen instead of using
 Notification Center: macOS refuses its notification API to an app that is
 not signed with a developer certificate. Clicking a notification opens that
 chat.
-
-Only macOS has been run. The Windows code passes `go vet` but has not been
-run. Linux has not been compiled or run.
 
 ### GUI security notes
 
