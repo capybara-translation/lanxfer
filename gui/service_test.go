@@ -461,6 +461,67 @@ func TestSaveSettingsRestarts(t *testing.T) {
 	}
 }
 
+func TestSaveSettingsUnchangedKeepsTransfers(t *testing.T) {
+	s, _, _ := newTestService(t, svcOpts{})
+	cur := s.Settings()
+
+	s.mu.Lock()
+	before := s.mgr
+	s.mu.Unlock()
+	if before == nil {
+		t.Fatal("no manager")
+	}
+	// The same values, with a trailing separator on the folder.
+	if err := s.SaveSettings(Settings{Name: cur.Name, SaveDir: cur.SaveDir + string(filepath.Separator)}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	after := s.mgr
+	s.mu.Unlock()
+	if after != before {
+		t.Error("an unchanged save replaced the manager, which cancels the sends")
+	}
+	if !s.State().Running {
+		t.Error("receiver stopped")
+	}
+
+	// A real change still restarts.
+	if err := s.SaveSettings(Settings{Name: cur.Name + "2", SaveDir: cur.SaveDir}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	changed := s.mgr
+	s.mu.Unlock()
+	if changed == before {
+		t.Error("a changed save did not replace the manager")
+	}
+}
+
+func TestServiceFollowsRegroupForTheOpenChat(t *testing.T) {
+	s, em, _ := newTestService(t, svcOpts{})
+	// An earlier message from a peer that had no ID lives in name:other.
+	old := incoming(history.KindText)
+	old.PeerID, old.Text = "", "before"
+	s.app.cfg.OnEvent(node.Event{Entry: &old})
+	barrier(t, s, em)
+	s.OpenChat("name:other")
+
+	rec := &recordingNotifier{}
+	s.setNotifier(rec, func() bool { return true })
+
+	// The peer is now known with an ID: name:other is merged into its chat,
+	// but the page still reports the old key as open.
+	s.app.cfg.OnEvent(node.Event{Peers: []presence.Peer{testPeer}})
+	barrier(t, s, em)
+	text := incoming(history.KindText)
+	text.Text = "after"
+	s.app.cfg.OnEvent(node.Event{Entry: &text})
+	barrier(t, s, em)
+	if got := rec.all(); len(got) != 0 {
+		t.Fatalf("notified for the chat in front after a regroup: %+v", got)
+	}
+}
+
 func TestQuitFreesThePort(t *testing.T) {
 	port := freePort(t)
 	s, _, _ := newTestService(t, svcOpts{port: port})
@@ -488,6 +549,40 @@ func TestQuitFreesThePort(t *testing.T) {
 	if answers(port) {
 		t.Fatal("Retry restarted the receiver after quit")
 	}
+}
+
+func TestQuitDoesNotWaitForeverForTheLifecycleLock(t *testing.T) {
+	old := lifeLockWait
+	lifeLockWait = 100 * time.Millisecond
+	defer func() { lifeLockWait = old }()
+
+	port := freePort(t)
+	s, _, _ := newTestService(t, svcOpts{port: port})
+	// A settings change that never lets go of the lock.
+	s.lifeMu.Lock()
+	done := make(chan struct{})
+	go func() { s.quit(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		s.lifeMu.Unlock()
+		t.Fatal("quit waited for lifeMu")
+	}
+	// The receiver was stopped without the lock.
+	if answers(port) {
+		t.Error("receiver still answers after quit")
+	}
+	// Nothing may start it again once the lock is free.
+	s.lifeMu.Unlock()
+	s.Retry()
+	if answers(port) {
+		t.Error("Retry restarted the receiver after quit")
+	}
+	waitFor(t, "closed to be set", func() bool {
+		s.lifeMu.Lock()
+		defer s.lifeMu.Unlock()
+		return s.closed
+	})
 }
 
 func TestQuitBeforeStart(t *testing.T) {

@@ -117,6 +117,15 @@ func (s *Store) resolve(k Key) Key {
 	return k
 }
 
+// Resolve returns the chat that now holds a key's entries: the key itself, or
+// the chat it was regrouped into by SetPeers. A key that was never seen is
+// returned as is.
+func (s *Store) Resolve(key Key) Key {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resolve(key)
+}
+
 // better reports whether a should be preferred over b when both match an
 // entry: online first, then most recently seen, then the smaller key.
 func better(a, b presence.Peer) bool {

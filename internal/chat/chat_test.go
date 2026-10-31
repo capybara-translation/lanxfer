@@ -146,6 +146,24 @@ func TestSetPeersRegroups(t *testing.T) {
 	}
 }
 
+func TestResolveFollowsRegroup(t *testing.T) {
+	s := New()
+	s.Add(text(history.In, "", "Mac1", "10.0.0.2", "a", at(1)))
+	if got := s.Resolve("name:mac1"); got != "name:mac1" {
+		t.Errorf("before = %q", got)
+	}
+	s.SetPeers([]presence.Peer{peer("AAAA", "Mac1", "10.0.0.2", true, at(5))})
+	if got := s.Resolve("name:mac1"); got != "id:AAAA" {
+		t.Errorf("after regroup = %q, want id:AAAA", got)
+	}
+	if got := s.Resolve("id:AAAA"); got != "id:AAAA" {
+		t.Errorf("merged key = %q", got)
+	}
+	if got := s.Resolve("name:never"); got != "name:never" {
+		t.Errorf("unknown = %q", got)
+	}
+}
+
 func TestEntriesUnderIDNeverMove(t *testing.T) {
 	s := New()
 	s.Add(text(history.In, "AAAA", "x", "10.0.0.2", "a", at(1)))

@@ -20,6 +20,8 @@ export class SettingsDialog {
     private busy = false;
     // The saved values were read; Save stays off until they were.
     private loaded = false;
+    // The values the dialog opened with, to tell whether Save changes anything.
+    private initial = {name: "", saveDir: ""};
 
     constructor(private els: SettingsElements, private toast: Toast) {
         els.overlay.hidden = true;
@@ -59,6 +61,7 @@ export class SettingsDialog {
             name.disabled = false;
             saveDir.disabled = false;
             this.els.save.disabled = false;
+            this.initial = {name: v.name, saveDir: v.saveDir};
             this.loaded = true;
             name.focus();
         } catch (err) {
@@ -82,7 +85,15 @@ export class SettingsDialog {
         close.disabled = true;
         error.textContent = "";
         try {
-            await api.saveSettings({name: name.value.trim(), saveDir: saveDir.value.trim()});
+            const next = {name: name.value.trim(), saveDir: saveDir.value.trim()};
+            if (next.name === this.initial.name && next.saveDir === this.initial.saveDir) {
+                // Nothing changed: saving would restart the receiver for nothing.
+                this.busy = false;
+                this.els.overlay.hidden = true;
+                this.toast.show("Settings unchanged.");
+                return;
+            }
+            await api.saveSettings(next);
             this.busy = false;
             this.els.overlay.hidden = true;
             this.toast.show("Settings saved. The receiver was restarted.");

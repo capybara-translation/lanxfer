@@ -32,6 +32,10 @@ const (
 	drainWait          = 2 * time.Second
 )
 
+// lifeLockWait is how long quit waits for a start, Retry or SaveSettings in
+// progress to let go of lifeMu. It is a variable so that a test can shorten it.
+var lifeLockWait = 3 * time.Second
+
 // serviceConfig is what Service needs from its surroundings; tests replace
 // parts of it.
 type serviceConfig struct {
@@ -167,7 +171,7 @@ func (s *Service) startup() {
 
 	s.lifeMu.Lock()
 	defer s.lifeMu.Unlock()
-	if s.closed {
+	if s.closed || s.quitting.Load() {
 		return
 	}
 	s.app.Start()
@@ -328,7 +332,9 @@ func (s *Service) notifyArrival(e history.Entry, key chat.Key) {
 		return
 	}
 	focused := active != nil && active()
-	if !shouldNotify(e, chat.Key(open), key, focused) {
+	// The page may have opened a key that was regrouped into another chat
+	// since; compare the chat it shows now with the arrival's.
+	if !shouldNotify(e, s.store.Resolve(chat.Key(open)), key, focused) {
 		return
 	}
 	n.Show(notificationTitle(s.store.Name(key)), notificationBody(e), key)
@@ -348,9 +354,16 @@ func (s *Service) emitChats() {
 func (s *Service) quit() {
 	s.quitOnce.Do(func() {
 		s.quitting.Store(true)
-		s.lifeMu.Lock()
-		s.closed = true
-		s.lifeMu.Unlock()
+		// A start or a settings change in progress holds lifeMu and may wait
+		// for the network or the disk. quit runs on the main thread, so it
+		// does not wait without a limit. If the lock stays taken, it goes on:
+		// quitting is already set, which the callers of lifeMu also check, and
+		// closed is set as soon as the lock is free.
+		s.bounded("waiting for a start or a settings change", lifeLockWait, func() {
+			s.lifeMu.Lock()
+			s.closed = true
+			s.lifeMu.Unlock()
+		})
 		s.mu.Lock()
 		m := s.mgr
 		s.mgr = nil
@@ -546,7 +559,7 @@ func (s *Service) Retry() {
 	}
 	s.lifeMu.Lock()
 	defer s.lifeMu.Unlock()
-	if !s.closed {
+	if !s.closed && !s.quitting.Load() {
 		s.app.Start()
 		if !s.app.State().Running {
 			s.loadSavedPeers()
@@ -560,7 +573,8 @@ func (s *Service) Settings() Settings {
 }
 
 // SaveSettings saves the settings and restarts the receiver with them. Sends
-// in progress are cancelled.
+// in progress are cancelled and incoming uploads are cut. Settings equal to the
+// saved ones change nothing and interrupt nothing.
 func (s *Service) SaveSettings(v Settings) error {
 	if err := peername.Validate(v.Name); err != nil {
 		return err
@@ -584,8 +598,15 @@ func (s *Service) SaveSettings(v Settings) error {
 
 	s.lifeMu.Lock()
 	defer s.lifeMu.Unlock()
-	if s.closed {
+	if s.closed || s.quitting.Load() {
 		return errors.New("lanxfer is quitting")
+	}
+	// Restarting cancels the sends and cuts the uploads in progress, so an
+	// unchanged form must not do it. Only a cleanly read file counts as the
+	// saved settings: a missing file means the defaults apply, and a broken
+	// one is replaced.
+	if cur, err := LoadSettings(path); err == nil && cur.Name == v.Name && cur.SaveDir == filepath.Clean(v.SaveDir) {
+		return nil
 	}
 	if err := v.Save(path); err != nil {
 		return err
