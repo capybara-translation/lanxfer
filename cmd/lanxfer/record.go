@@ -66,7 +66,7 @@ func appendHistory(e history.Entry) error {
 // the source path to store and name the name that was sent; size is the file
 // size, which a folder plan overrides with its content size. res may be nil
 // when the transfer failed. ctx tells a cancellation from a failure.
-func sendEntry(ctx context.Context, tg target, path, name string, size int64, plan *client.DirPlan, res *client.Result, err error) history.Entry {
+func sendEntry(ctx context.Context, tg sendTarget, path, name string, size int64, plan *client.DirPlan, res *client.Result, err error) history.Entry {
 	e := history.Entry{
 		Dir:      history.Out,
 		PeerID:   tg.ID,
@@ -86,7 +86,7 @@ func sendEntry(ctx context.Context, tg target, path, name string, size int64, pl
 
 // textEntry describes one sent message for the history. ctx tells a
 // cancellation from a failure.
-func textEntry(ctx context.Context, tg target, text string, res *client.Result, err error) history.Entry {
+func textEntry(ctx context.Context, tg sendTarget, text string, res *client.Result, err error) history.Entry {
 	e := history.Entry{
 		Dir:      history.Out,
 		PeerID:   tg.ID,

@@ -20,6 +20,7 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/humanize"
 	"github.com/capybara-translation/lanxfer/internal/peername"
 	"github.com/capybara-translation/lanxfer/internal/presence"
+	"github.com/capybara-translation/lanxfer/internal/target"
 )
 
 // These are variables so tests can resolve names without a network or a
@@ -175,12 +176,22 @@ func interrupted(ctx context.Context, err error) error {
 	return err
 }
 
-// target is a resolved send destination.
-type target struct {
-	Addr   netip.AddrPort
-	ByName bool   // the user gave a name, not an IP address
-	ID     string // the peer's device ID; "" for an IP address or a peer without one
-	Name   string // the peer's name; "" for an IP address
+// sendTarget is a resolved send destination.
+type sendTarget struct {
+	target.Target
+	ByName bool // the user gave a name, not an IP address
+}
+
+// finder builds the lookup from the stubbable discovery functions.
+func finder() target.Finder {
+	return target.Finder{
+		Query: func(ctx context.Context, addr netip.AddrPort, wait time.Duration) ([]discovery.Peer, error) {
+			return queryAddrFunc(ctx, addr, wait)
+		},
+		Discover: func(ctx context.Context, port int, wait time.Duration) ([]discovery.Peer, error) {
+			return discoverFunc(ctx, port, wait)
+		},
+	}
 }
 
 // resolveTarget turns the send target into an address. An IP literal is used
@@ -189,12 +200,12 @@ type target struct {
 // (or without that name) the name is looked up via discovery. The HTTP port
 // comes from the stored or discovered peer, not from port. selfID is this
 // machine's device ID, which the local receiver must share to be trusted.
-func resolveTarget(ctx context.Context, name string, port int, selfID string) (target, error) {
+func resolveTarget(ctx context.Context, name string, port int, selfID string) (sendTarget, error) {
 	if port < 1 || port > 65535 {
-		return target{}, fmt.Errorf("%w: port %d out of range", errUsage, port)
+		return sendTarget{}, fmt.Errorf("%w: port %d out of range", errUsage, port)
 	}
 	if ip, err := netip.ParseAddr(name); err == nil {
-		return target{Addr: netip.AddrPortFrom(ip, uint16(port))}, nil
+		return sendTarget{Target: target.Target{Addr: netip.AddrPortFrom(ip, uint16(port))}}, nil
 	}
 
 	// Any failure of the local list falls back to broadcast, which is what
@@ -203,72 +214,23 @@ func resolveTarget(ctx context.Context, name string, port int, selfID string) (t
 		p, err := presence.Choose(list, name)
 		switch {
 		case err == nil:
-			return resolveListed(ctx, p, port)
+			tg, err := finder().Locate(ctx, p, port)
+			if err != nil {
+				return sendTarget{}, err
+			}
+			return sendTarget{Target: tg, ByName: true}, nil
 		case !errors.Is(err, presence.ErrNotFound):
-			return target{}, err
+			return sendTarget{}, err
 		}
 	}
 	return resolveByDiscovery(ctx, name, port)
 }
 
-// resolveListed turns a peer chosen from the receiver's list into a target.
-// An online peer is used as listed. An offline one may only be listening
-// where broadcasts do not reach, so its last address is asked directly, and
-// the peer is used only if the machine answering there is still the same one
-// (same ID, or same name for a peer without an ID). When that fails, because
-// nobody answers or another machine does, for example after the peer got a new
-// address, a broadcast search on port looks for it: by ID, whatever name it now
-// uses, or by name for a peer without an ID. A different ID with the same name
-// is a different machine and is never used. Only if both fail is the peer
-// reported as offline.
-func resolveListed(ctx context.Context, p presence.Peer, port int) (target, error) {
-	tg := target{Addr: p.Addr, ByName: true, ID: p.ID, Name: p.Name}
-	if p.Online {
-		return tg, nil
-	}
-	replies, err := queryAddrFunc(ctx, p.Addr, time.Second)
-	if err == nil {
-		for _, r := range replies {
-			same := strings.EqualFold(r.Name, p.Name)
-			if p.ID != "" {
-				same = r.ID == p.ID
-			}
-			if same {
-				tg.Addr, tg.Name = r.Addr, r.Name
-				return tg, nil
-			}
-		}
-	}
-
-	offline := fmt.Errorf("%s is offline (last seen %s)", p.Name, formatLastSeen(p.LastSeen))
-	if ctx.Err() != nil {
-		return target{}, offline // the caller reports the cancellation
-	}
-	found, err := discoverFunc(ctx, port, time.Second)
-	if err != nil {
-		return target{}, offline
-	}
-	var matches []discovery.Peer
-	for _, r := range found {
-		if (p.ID != "" && r.ID == p.ID) || (p.ID == "" && strings.EqualFold(r.Name, p.Name)) {
-			matches = append(matches, r)
-		}
-	}
-	if len(matches) == 0 {
-		return target{}, offline
-	}
-	if p.ID != "" {
-		// Several replies with one ID are one machine on several interfaces.
-		matches = matches[:1]
-	}
-	return pickDiscovered(p.Name, matches)
-}
-
 // resolveByDiscovery finds a peer by name with a broadcast query.
-func resolveByDiscovery(ctx context.Context, name string, port int) (target, error) {
+func resolveByDiscovery(ctx context.Context, name string, port int) (sendTarget, error) {
 	peers, err := discoverFunc(ctx, port, time.Second)
 	if err != nil {
-		return target{}, err
+		return sendTarget{}, err
 	}
 	var matches []discovery.Peer
 	for _, p := range peers {
@@ -277,25 +239,11 @@ func resolveByDiscovery(ctx context.Context, name string, port int) (target, err
 		}
 	}
 	if len(matches) == 0 {
-		return target{}, fmt.Errorf("no peer named %q (run 'lanxfer peers' to see who is available)", name)
+		return sendTarget{}, fmt.Errorf("no peer named %q (run 'lanxfer peers' to see who is available)", name)
 	}
-	return pickDiscovered(name, matches)
-}
-
-// pickDiscovered turns the non-empty list of discovered peers that match name
-// into a target. Several matches are an error that lists their addresses.
-func pickDiscovered(name string, matches []discovery.Peer) (target, error) {
-	if len(matches) == 1 {
-		return target{Addr: matches[0].Addr, ByName: true, ID: matches[0].ID, Name: matches[0].Name}, nil
+	tg, err := target.Pick(name, matches)
+	if err != nil {
+		return sendTarget{}, err
 	}
-	var list []string
-	for _, p := range matches {
-		list = append(list, p.Addr.Addr().String())
-	}
-	return target{}, fmt.Errorf("multiple peers named %q (%s); specify an IP address", name, strings.Join(list, ", "))
-}
-
-// formatLastSeen formats a last-seen time for people, in local time.
-func formatLastSeen(t time.Time) string {
-	return t.Local().Format("2006-01-02 15:04")
+	return sendTarget{Target: tg, ByName: true}, nil
 }

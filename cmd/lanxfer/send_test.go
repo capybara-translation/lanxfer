@@ -13,6 +13,7 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/discovery"
 	"github.com/capybara-translation/lanxfer/internal/presence"
+	"github.com/capybara-translation/lanxfer/internal/target"
 )
 
 // stubDiscover replaces discoverFunc for one test and returns a pointer to
@@ -119,7 +120,7 @@ func TestResolveTargetUsesLocalPeers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := target{Addr: netip.MustParseAddrPort("192.168.68.59:9000"), ByName: true, ID: idUbuntu, Name: "ubuntu"}
+	want := sendTarget{Target: target.Target{Addr: netip.MustParseAddrPort("192.168.68.59:9000"), ID: idUbuntu, Name: "ubuntu"}, ByName: true}
 	if got != want {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
@@ -134,187 +135,64 @@ func TestResolveTargetUsesLocalPeers(t *testing.T) {
 	}
 }
 
-func TestResolveTargetVerifiesOfflinePeer(t *testing.T) {
-	lastSeen := time.Date(2026, 10, 20, 9, 5, 0, 0, time.UTC)
-	offline := func(id string) presence.Peer {
-		p := onlinePeer("mac2", id, "192.168.68.54:8425")
-		p.Online, p.LastSeen = false, lastSeen
-		return p
-	}
-	newAddr := netip.MustParseAddrPort("192.168.68.99:8425")
-	tests := []struct {
-		name          string
-		peer          presence.Peer
-		replies       []discovery.Peer // the unicast reply
-		queryErr      error
-		discovered    []discovery.Peer // the broadcast fallback
-		discoverErr   error
-		wantDiscovery bool   // the broadcast fallback is expected to run
-		wantAddr      string // "" means an offline error is expected
-		wantID        string
-		wantName      string // the target's name when found
-	}{
-		{
-			name:     "same ID, uses the reply's address",
-			peer:     offline(idMac2),
-			replies:  []discovery.Peer{{Name: "mac2-renamed", ID: idMac2, Addr: netip.MustParseAddrPort("192.168.68.54:9001")}},
-			wantAddr: "192.168.68.54:9001", wantID: idMac2, wantName: "mac2-renamed",
-		},
-		{
-			name:     "legacy peer matches by name, ignoring case",
-			peer:     offline(""),
-			replies:  []discovery.Peer{{Name: "MAC2", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
-			wantAddr: "192.168.68.54:8425", wantName: "MAC2",
-		},
-		{
-			name:          "different ID at the same address, nobody else answers",
-			peer:          offline(idMac2),
-			replies:       []discovery.Peer{{Name: "mac2", ID: idOther, Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
-			wantDiscovery: true,
-		},
-		{
-			name:          "reply without ID does not match a peer with one",
-			peer:          offline(idMac2),
-			replies:       []discovery.Peer{{Name: "mac2", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
-			wantDiscovery: true,
-		},
-		{name: "no reply", peer: offline(idMac2), wantDiscovery: true},
-		{name: "query fails", peer: offline(idMac2), queryErr: errors.New("network down"), wantDiscovery: true},
-		{
-			name:          "legacy peer with another name",
-			peer:          offline(""),
-			replies:       []discovery.Peer{{Name: "other", Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
-			wantDiscovery: true,
-		},
-		{
-			name:          "no reply, same ID found at a new address by broadcast",
-			peer:          offline(idMac2),
-			discovered:    []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: newAddr}},
-			wantDiscovery: true,
-			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2",
-		},
-		{
-			name:          "no reply, same ID found under a new name by broadcast",
-			peer:          offline(idMac2),
-			discovered:    []discovery.Peer{mac2b, {Name: "mac2-renamed", ID: idMac2, Addr: newAddr}},
-			wantDiscovery: true,
-			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2-renamed",
-		},
-		{
-			name:          "mismatching reply, same ID found elsewhere by broadcast",
-			peer:          offline(idMac2),
-			replies:       []discovery.Peer{{Name: "mac2", ID: idOther, Addr: netip.MustParseAddrPort("192.168.68.54:8425")}},
-			discovered:    []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: newAddr}},
-			wantDiscovery: true,
-			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2",
-		},
-		{
-			name:          "query fails, same ID found by broadcast",
-			peer:          offline(idMac2),
-			queryErr:      errors.New("network down"),
-			discovered:    []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: newAddr}},
-			wantDiscovery: true,
-			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2",
-		},
-		{
-			name:          "broadcast finds only another ID with the same name",
-			peer:          offline(idMac2),
-			discovered:    []discovery.Peer{{Name: "mac2", ID: idOther, Addr: newAddr}, mac2b},
-			wantDiscovery: true,
-		},
-		{
-			name:          "legacy peer found by name by broadcast",
-			peer:          offline(""),
-			discovered:    []discovery.Peer{ubuntu, {Name: "MAC2", Addr: newAddr}},
-			wantDiscovery: true,
-			wantAddr:      newAddr.String(), wantName: "MAC2",
-		},
-		{
-			name:          "legacy peer found by broadcast with an ID takes it",
-			peer:          offline(""),
-			discovered:    []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: newAddr}},
-			wantDiscovery: true,
-			wantAddr:      newAddr.String(), wantID: idMac2, wantName: "mac2",
-		},
-		{
-			name:          "broadcast fails",
-			peer:          offline(idMac2),
-			discoverErr:   discovery.ErrNoNetwork,
-			wantDiscovery: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var discoverPort int
-			discoverCalls := 0
-			orig := discoverFunc
-			discoverFunc = func(_ context.Context, port int, _ time.Duration) ([]discovery.Peer, error) {
-				discoverCalls++
-				discoverPort = port
-				return tt.discovered, tt.discoverErr
-			}
-			t.Cleanup(func() { discoverFunc = orig })
-			stubLocalPeers(t, []presence.Peer{tt.peer}, nil)
-			queries := stubQueryAddr(t, tt.replies, tt.queryErr)
-
-			got, err := resolveTarget(context.Background(), "mac2", 8500, idSelf)
-			if len(*queries) != 1 || (*queries)[0] != tt.peer.Addr {
-				t.Errorf("queried %v, want exactly the stored address %s", *queries, tt.peer.Addr)
-			}
-			if (discoverCalls == 1) != tt.wantDiscovery || discoverCalls > 1 {
-				t.Errorf("broadcast discovery ran %d times, want it used = %v", discoverCalls, tt.wantDiscovery)
-			}
-			if discoverCalls == 1 && discoverPort != 8500 {
-				t.Errorf("discovery on port %d, want 8500", discoverPort)
-			}
-			if tt.wantAddr == "" {
-				want := "mac2 is offline (last seen " + lastSeen.Local().Format("2006-01-02 15:04") + ")"
-				if err == nil || err.Error() != want {
-					t.Errorf("err = %v, want %q", err, want)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Addr.String() != tt.wantAddr || !got.ByName || got.ID != tt.wantID || got.Name != tt.wantName {
-				t.Errorf("got %+v, want addr %s, ID %q, name %q", got, tt.wantAddr, tt.wantID, tt.wantName)
-			}
-		})
-	}
-}
-
-func TestResolveTargetOfflineSameIDOnSeveralInterfacesUsesFirst(t *testing.T) {
+// The offline cases are tested in internal/target. These check that the
+// command line hands its stubbed lookups to the shared Finder.
+func TestResolveTargetOfflinePeerUsesFinder(t *testing.T) {
 	p := onlinePeer("mac2", idMac2, "192.168.68.54:8425")
 	p.Online = false
+	p.LastSeen = time.Date(2026, 10, 20, 9, 5, 0, 0, time.UTC)
 	stubLocalPeers(t, []presence.Peer{p}, nil)
-	first := netip.MustParseAddrPort("192.168.68.60:8425")
-	stubDiscover(t, []discovery.Peer{
-		{Name: "mac2", ID: idMac2, Addr: first},
-		{Name: "mac2", ID: idMac2, Addr: netip.MustParseAddrPort("10.0.0.5:8425")},
-	}, nil)
-	got, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Addr != first || got.ID != idMac2 {
-		t.Errorf("got %+v, want the first reply %s", got, first)
-	}
-}
 
-func TestResolveTargetOfflineLegacyPeerAmbiguousViaDiscovery(t *testing.T) {
-	p := onlinePeer("mac2", "", "192.168.68.54:8425")
-	p.Online = false
-	stubLocalPeers(t, []presence.Peer{p}, nil)
-	stubDiscover(t, []discovery.Peer{
-		{Name: "mac2", Addr: netip.MustParseAddrPort("192.168.68.60:8425")},
-		{Name: "MAC2", Addr: netip.MustParseAddrPort("192.168.68.61:8425")},
-	}, nil)
-	_, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
-	want := `multiple peers named "mac2" (192.168.68.60, 192.168.68.61); specify an IP address`
-	if err == nil || err.Error() != want {
-		t.Errorf("err = %v, want %q", err, want)
-	}
+	t.Run("answered at the stored address", func(t *testing.T) {
+		reply := discovery.Peer{Name: "mac2", ID: idMac2, Addr: netip.MustParseAddrPort("192.168.68.54:9001")}
+		queries := stubQueryAddr(t, []discovery.Peer{reply}, nil)
+		calls := stubDiscover(t, nil, errors.New("must not be called"))
+		got, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(*queries) != 1 || (*queries)[0] != p.Addr {
+			t.Errorf("queried %v, want exactly %s", *queries, p.Addr)
+		}
+		if got.Addr != reply.Addr || !got.ByName || got.ID != idMac2 || got.Name != "mac2" {
+			t.Errorf("got %+v", got)
+		}
+		if *calls != 0 {
+			t.Errorf("broadcast ran %d times", *calls)
+		}
+	})
+
+	t.Run("found at a new address by broadcast", func(t *testing.T) {
+		stubQueryAddr(t, nil, nil)
+		var gotPort int
+		orig := discoverFunc
+		discoverFunc = func(_ context.Context, port int, _ time.Duration) ([]discovery.Peer, error) {
+			gotPort = port
+			return []discovery.Peer{{Name: "mac2", ID: idMac2, Addr: netip.MustParseAddrPort("192.168.68.99:8425")}}, nil
+		}
+		t.Cleanup(func() { discoverFunc = orig })
+		got, err := resolveTarget(context.Background(), "mac2", 8500, idSelf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotPort != 8500 || got.Addr.String() != "192.168.68.99:8425" || !got.ByName {
+			t.Errorf("port %d, got %+v", gotPort, got)
+		}
+	})
+
+	t.Run("nobody answers", func(t *testing.T) {
+		stubQueryAddr(t, nil, nil)
+		stubDiscover(t, nil, nil)
+		_, err := resolveTarget(context.Background(), "mac2", 8425, idSelf)
+		var off *target.OfflineError
+		if !errors.As(err, &off) {
+			t.Fatalf("err = %v, want an *OfflineError", err)
+		}
+		want := "mac2 is offline (last seen " + p.LastSeen.Local().Format("2006-01-02 15:04") + ")"
+		if err.Error() != want {
+			t.Errorf("err = %q, want %q", err, want)
+		}
+	})
 }
 
 func TestResolveTargetOfflineCancelledStaysCancelled(t *testing.T) {

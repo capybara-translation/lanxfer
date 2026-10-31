@@ -12,6 +12,7 @@ import (
 	"github.com/capybara-translation/lanxfer/internal/client"
 	"github.com/capybara-translation/lanxfer/internal/history"
 	"github.com/capybara-translation/lanxfer/internal/identity"
+	"github.com/capybara-translation/lanxfer/internal/target"
 )
 
 func sampleEntry() history.Entry {
@@ -167,7 +168,7 @@ func TestDeviceIDWarnsWhenConfigDirUnknown(t *testing.T) {
 }
 
 func TestSendEntry(t *testing.T) {
-	tg := target{Addr: mac2.Addr, ByName: true, ID: idMac2, Name: "mac2"}
+	tg := sendTarget{Target: target.Target{Addr: mac2.Addr, ID: idMac2, Name: "mac2"}, ByName: true}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 

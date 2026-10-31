@@ -13,6 +13,7 @@ import (
 
 	"github.com/capybara-translation/lanxfer/internal/discovery"
 	"github.com/capybara-translation/lanxfer/internal/presence"
+	"github.com/capybara-translation/lanxfer/internal/target"
 )
 
 func runPeers(args []string) error {
@@ -84,7 +85,7 @@ func printPeers(w io.Writer, rows []peerRow) {
 	for _, r := range rows {
 		status, lastSeen := "online", "-"
 		if !r.Online {
-			status, lastSeen = "offline", formatLastSeen(r.LastSeen)
+			status, lastSeen = "offline", target.FormatLastSeen(r.LastSeen)
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.Addr, r.OS, status, lastSeen)
 	}
