@@ -14,6 +14,47 @@ Early but usable: file and folder transfer with progress display, short text
 messages, automatic peer discovery with a remembered peer list, sending by
 name, and a history of what was sent and received. No encryption yet.
 
+## Install
+
+### Homebrew (macOS / Linux)
+
+    brew install --cask capybara-translation/tap/lanxfer
+
+To upgrade to the latest release:
+
+    brew upgrade --cask capybara-translation/tap/lanxfer
+
+### go install
+
+    go install github.com/capybara-translation/lanxfer/cmd/lanxfer@latest
+
+### Pre-built binaries
+
+Download the archive for your platform from the
+[Releases page](https://github.com/capybara-translation/lanxfer/releases)
+(`tar.gz` for macOS/Linux, `zip` for Windows) and put the `lanxfer` binary
+somewhere on your `PATH`. `checksums.txt` on the same page lists the SHA-256
+of every archive.
+
+### Build from source
+
+    git clone https://github.com/capybara-translation/lanxfer.git
+    cd lanxfer
+    go build -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty)" ./cmd/lanxfer
+
+Requires the Go version declared in `go.mod`. No third-party dependencies.
+
+### What `lanxfer --version` prints
+
+| How you installed | Output |
+|---|---|
+| Homebrew or a Releases archive | `lanxfer vX.Y.Z` |
+| `go install ...@vX.Y.Z` | `lanxfer vX.Y.Z` |
+| `go install ...@latest` from a non-tagged commit | `lanxfer dev` (pseudo versions are intentionally hidden) |
+| `go build` with the `ldflags` example above | whatever `git describe` resolves to |
+| Plain `go build` on a clean, tagged checkout | `lanxfer vX.Y.Z` |
+| Plain `go build` on any other checkout | `lanxfer dev` (untagged commits and uncommitted changes are hidden) |
+
 ## Usage
 
 Receiver (waits in the foreground; stop with Ctrl-C):
@@ -391,43 +432,6 @@ ID is also broadcast on the LAN, so this is not protection against a
 deliberate attacker.) Responses: `204` recorded, `400` invalid entry,
 `409` not this device's receiver, `413` too large, `415` wrong content type,
 `500` could not be recorded.
-
-## Install
-
-### Homebrew (macOS / Linux)
-
-    brew install --cask capybara-translation/tap/lanxfer
-
-### go install
-
-    go install github.com/capybara-translation/lanxfer/cmd/lanxfer@latest
-
-### Pre-built binaries
-
-Download the archive for your platform from the
-[Releases page](https://github.com/capybara-translation/lanxfer/releases)
-(`tar.gz` for macOS/Linux, `zip` for Windows) and put the `lanxfer` binary
-somewhere on your `PATH`. `checksums.txt` on the same page lists the SHA-256
-of every archive.
-
-### Build from source
-
-    git clone https://github.com/capybara-translation/lanxfer.git
-    cd lanxfer
-    go build -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty)" ./cmd/lanxfer
-
-Requires the Go version declared in `go.mod`. No third-party dependencies.
-
-### What `lanxfer --version` prints
-
-| How you installed | Output |
-|---|---|
-| Homebrew or a Releases archive | `lanxfer vX.Y.Z` |
-| `go install ...@vX.Y.Z` | `lanxfer vX.Y.Z` |
-| `go install ...@latest` from a non-tagged commit | `lanxfer dev` (pseudo versions are intentionally hidden) |
-| `go build` with the `ldflags` example above | whatever `git describe` resolves to |
-| Plain `go build` on a clean, tagged checkout | `lanxfer vX.Y.Z` |
-| Plain `go build` on any other checkout | `lanxfer dev` (untagged commits and uncommitted changes are hidden) |
 
 ## Roadmap
 
