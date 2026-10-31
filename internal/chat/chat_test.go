@@ -137,11 +137,9 @@ func TestSetPeersRegroups(t *testing.T) {
 	if strings.Join(got, ",") != "a,c,b" {
 		t.Errorf("merged = %v, want a,c,b ordered by time", got)
 	}
-	if m, _ := s.Messages("name:mac1", 0, 200); len(m) != 0 {
-		t.Errorf("name:mac1 still has %d", len(m))
-	}
-	if m, _ := s.Messages("addr:10.0.0.2", 0, 200); len(m) != 0 {
-		t.Errorf("addr chat still has %d", len(m))
+	// The old keys are gone as chats; they only resolve through aliases.
+	if s.chats["name:mac1"] != nil || s.chats["addr:10.0.0.2"] != nil {
+		t.Error("old chats still exist")
 	}
 	if m, _ := s.Messages("name:other", 0, 200); len(m) != 1 {
 		t.Errorf("name:other = %d", len(m))
@@ -450,4 +448,93 @@ func TestConcurrentUse(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
+}
+
+func TestRegroupMergesSeveralSourcesInTimeOrder(t *testing.T) {
+	// Run several times: the source chats are visited in map order.
+	for n := 0; n < 20; n++ {
+		s := New()
+		s.Add(text(history.In, "", "mac1", "", "n1", at(1)))
+		s.Add(text(history.In, "", "mac1", "", "n3", at(3)))
+		s.Add(text(history.In, "", "", "10.0.0.2", "a2", at(2)))
+		s.Add(text(history.In, "", "", "10.0.0.2", "a4", at(4)))
+		s.Add(text(history.In, "AAAA", "mac1", "10.0.0.2", "i0", at(0)))
+		s.SetPeers([]presence.Peer{peer("AAAA", "mac1", "10.0.0.2", true, at(5))})
+		m, _ := s.Messages("id:AAAA", 0, 200)
+		var got []string
+		for _, e := range m {
+			got = append(got, e.Text)
+		}
+		if strings.Join(got, ",") != "i0,n1,a2,n3,a4" {
+			t.Fatalf("merged = %v", got)
+		}
+		if u := summaryOf(t, s, "id:AAAA").Unread; u != 5 {
+			t.Fatalf("unread = %d, want 5", u)
+		}
+	}
+}
+
+func TestOldKeyFollowsRegroup(t *testing.T) {
+	s := New()
+	s.Add(text(history.In, "", "mac1", "10.0.0.2", "a", at(1)))
+	s.Open("name:mac1")
+	s.SetPeers([]presence.Peer{peer("AAAA", "mac1", "10.0.0.2", true, at(2))})
+	if m, _ := s.Messages("name:mac1", 0, 200); len(m) != 1 || m[0].Text != "a" {
+		t.Fatalf("old key Messages = %+v", m)
+	}
+	if p, ok := s.Peer("name:mac1"); !ok || p.ID != "AAAA" {
+		t.Errorf("old key Peer = %+v %v", p, ok)
+	}
+	s.Add(text(history.In, "AAAA", "mac1", "10.0.0.2", "b", at(3)))
+	if u := summaryOf(t, s, "id:AAAA").Unread; u != 0 {
+		t.Errorf("unread = %d, the open chat follows the alias", u)
+	}
+	// Re-opening by the stale key lands on the new chat.
+	s.Open("")
+	s.Add(text(history.In, "AAAA", "mac1", "10.0.0.2", "c", at(4)))
+	s.Open("name:mac1")
+	if u := summaryOf(t, s, "id:AAAA").Unread; u != 0 {
+		t.Errorf("unread after Open(old key) = %d", u)
+	}
+	s.Add(text(history.In, "AAAA", "mac1", "10.0.0.2", "d", at(5)))
+	if u := summaryOf(t, s, "id:AAAA").Unread; u != 0 {
+		t.Errorf("unread while open via old key = %d", u)
+	}
+}
+
+func TestAliasChain(t *testing.T) {
+	s := New()
+	s.Add(text(history.In, "", "", "10.0.0.2", "a", at(1)))
+	// First the address chat joins an ID-less peer, then that peer gets an ID.
+	s.SetPeers([]presence.Peer{peer("", "win", "10.0.0.2", true, at(2))})
+	s.SetPeers([]presence.Peer{peer("AAAA", "win", "10.0.0.2", true, at(3))})
+	if m, _ := s.Messages("addr:10.0.0.2", 0, 200); len(m) != 1 {
+		t.Errorf("chain lookup gave %d", len(m))
+	}
+}
+
+func TestSummaryNameFallbacks(t *testing.T) {
+	s := New()
+	s.Add(text(history.In, "0123456789ABCDEF", "", "", "x", at(1)))
+	if n := summaryOf(t, s, "id:0123456789ABCDEF").Name; n != "01234567" {
+		t.Errorf("name = %q, want the first 8 characters of the ID", n)
+	}
+	s.Add(text(history.In, "", "", "", "y", at(2)))
+	if n := summaryOf(t, s, "addr:").Name; n != "Unknown" {
+		t.Errorf("name = %q, want Unknown", n)
+	}
+}
+
+func TestSetPeersWithoutMovesDoesNotCopyEntries(t *testing.T) {
+	s := New()
+	es := make([]history.Entry, 2000)
+	for i := range es {
+		es[i] = text(history.In, "", "Some Box", "10.0.0.7", "x", at(i))
+	}
+	s.Load(es)
+	peers := []presence.Peer{peer("AAAA", "other", "10.0.0.9", true, at(0))}
+	allocs := testing.AllocsPerRun(5, func() { s.SetPeers(peers) })
+	if allocs > 100 {
+		t.Errorf("SetPeers allocated %.0f times for 2000 unmoved entries", allocs)
+	}
 }

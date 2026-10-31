@@ -63,17 +63,18 @@ type Store struct {
 	mu    sync.Mutex
 	chats map[Key]*chat
 	open  Key
+	alias map[Key]Key // regrouped chat -> the chat its entries moved to
 
 	peers    []presence.Peer
 	byID     map[string]presence.Peer // peers with an ID
 	byKey    map[Key]presence.Peer    // ID-less peers, keyed by name:
-	bestAddr map[string]Key           // IP -> key of the peer to use
+	bestAddr map[netip.Addr]Key       // IP -> key of the peer to use
 	bestName map[string]Key           // lowercased name -> key of the peer to use
 }
 
 // New returns an empty Store.
 func New() *Store {
-	s := &Store{chats: make(map[Key]*chat)}
+	s := &Store{chats: make(map[Key]*chat), alias: make(map[Key]Key)}
 	s.indexPeers(nil)
 	return s
 }
@@ -99,6 +100,23 @@ func normAddr(s string) string {
 	return s
 }
 
+// resolve follows the aliases left by SetPeers to the chat that now holds a
+// key's entries. A key that still has its own chat is returned as is. The
+// caller holds mu.
+func (s *Store) resolve(k Key) Key {
+	for i := 0; i <= len(s.alias); i++ {
+		if s.chats[k] != nil {
+			return k
+		}
+		next, ok := s.alias[k]
+		if !ok {
+			return k
+		}
+		k = next
+	}
+	return k
+}
+
 // better reports whether a should be preferred over b when both match an
 // entry: online first, then most recently seen, then the smaller key.
 func better(a, b presence.Peer) bool {
@@ -116,9 +134,9 @@ func (s *Store) indexPeers(peers []presence.Peer) {
 	s.peers = append([]presence.Peer(nil), peers...)
 	s.byID = make(map[string]presence.Peer)
 	s.byKey = make(map[Key]presence.Peer)
-	s.bestAddr = make(map[string]Key)
+	s.bestAddr = make(map[netip.Addr]Key)
 	s.bestName = make(map[string]Key)
-	bestAddrPeer := make(map[string]presence.Peer)
+	bestAddrPeer := make(map[netip.Addr]presence.Peer)
 	bestNamePeer := make(map[string]presence.Peer)
 	for _, p := range s.peers {
 		if p.ID != "" {
@@ -127,7 +145,7 @@ func (s *Store) indexPeers(peers []presence.Peer) {
 			s.byKey[peerKey(p)] = p
 		}
 		if ip := p.Addr.Addr(); ip.IsValid() {
-			k := ip.Unmap().String()
+			k := ip.Unmap()
 			if cur, ok := bestAddrPeer[k]; !ok || better(p, cur) {
 				bestAddrPeer[k] = p
 				s.bestAddr[k] = peerKey(p)
@@ -146,11 +164,11 @@ func (s *Store) classify(e *history.Entry) Key {
 	if e.PeerID != "" {
 		return idKey(e.PeerID)
 	}
-	addr := ""
 	if e.PeerAddr != "" {
-		addr = normAddr(e.PeerAddr)
-		if k, ok := s.bestAddr[addr]; ok {
-			return k
+		if a, err := netip.ParseAddr(e.PeerAddr); err == nil {
+			if k, ok := s.bestAddr[a.Unmap()]; ok {
+				return k
+			}
 		}
 	}
 	if e.PeerName != "" {
@@ -159,7 +177,7 @@ func (s *Store) classify(e *history.Entry) Key {
 		}
 		return nameKey(e.PeerName)
 	}
-	return addrKey(addr)
+	return addrKey(normAddr(e.PeerAddr))
 }
 
 func (s *Store) chatFor(k Key) *chat {
@@ -171,9 +189,10 @@ func (s *Store) chatFor(k Key) *chat {
 	return c
 }
 
-// Load adds entries read from the history file, keeping file order, and puts
-// them before anything already added so a receipt that arrives while the file
-// is being read stays last. Loaded entries are not unread. Call it once.
+// Load adds entries read from the history file, keeping file order. Loaded
+// entries are not unread. Call it once, before any Add: the GUI loads the file
+// before the node starts. Anything added earlier is kept after the loaded
+// entries, but calling Load a second time would duplicate them.
 func (s *Store) Load(entries []history.Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -211,65 +230,100 @@ func (s *Store) Add(e history.Entry) Key {
 
 // SetPeers replaces the peer list and regroups entries that were filed under
 // a name or an address and now match a peer. Entries filed under an ID never
-// move.
+// move. A chat whose entries all moved leaves an alias so Messages, Open and
+// Peer still accept its old key.
 func (s *Store) SetPeers(peers []presence.Peer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.indexPeers(peers)
 
-	type move struct {
+	type batch struct {
 		to    Key
 		items []item
 	}
-	var moves []move
-	byTo := make(map[Key]int)
+	type source struct {
+		key     Key
+		chat    *chat
+		kept    []item
+		batches []batch
+		lastTo  Key
+	}
+	var sources []*source
+	// Legacy entries repeat the same name and address many times, so classify
+	// each distinct pair once.
+	type pair struct{ name, addr string }
+	memo := make(map[pair]Key)
 	for k, c := range s.chats {
 		if !strings.HasPrefix(string(k), namePrefix) && !strings.HasPrefix(string(k), addrPrefix) {
 			continue
 		}
-		kept := c.items[:0:0]
-		var moved []Key
-		for _, it := range c.items {
-			to := s.classify(&it.e)
+		// Scan first and copy into kept only once an entry moves, so a
+		// call that changes nothing allocates nothing per entry.
+		var src *source
+		var idx map[Key]int
+		for i := range c.items {
+			it := &c.items[i]
+			p := pair{it.e.PeerName, it.e.PeerAddr}
+			to, ok := memo[p]
+			if !ok {
+				to = s.classify(&it.e)
+				memo[p] = to
+			}
 			if to == k {
-				kept = append(kept, it)
+				if src != nil {
+					src.kept = append(src.kept, *it)
+				}
 				continue
 			}
-			i, ok := byTo[to]
+			if src == nil {
+				src = &source{key: k, chat: c, kept: append([]item(nil), c.items[:i]...)}
+				idx = make(map[Key]int)
+			}
+			j, ok := idx[to]
 			if !ok {
-				i = len(moves)
-				byTo[to] = i
-				moves = append(moves, move{to: to})
+				j = len(src.batches)
+				idx[to] = j
+				src.batches = append(src.batches, batch{to: to})
 			}
-			moves[i].items = append(moves[i].items, it)
-			moved = append(moved, to)
-			if it.unread {
-				c.unread--
-			}
+			src.batches[j].items = append(src.batches[j].items, *it)
+			src.lastTo = to
 		}
-		if len(moved) == 0 {
-			continue
-		}
-		if len(kept) == 0 {
-			delete(s.chats, k)
-			// The open chat follows its entries.
-			if s.open == k {
-				s.open = moved[len(moved)-1]
-			}
-		} else {
-			c.items = kept
+		if src != nil {
+			sources = append(sources, src)
 		}
 	}
-	for _, m := range moves {
-		c := s.chatFor(m.to)
-		c.items = mergeByTime(c.items, m.items)
-		for _, it := range m.items {
-			if it.unread {
-				c.unread++
+
+	// Apply source by source in key order so the result does not depend on
+	// map iteration order. Each batch is in one chat's arrival order, which
+	// is what mergeByTime needs.
+	sort.Slice(sources, func(i, j int) bool { return sources[i].key < sources[j].key })
+	for _, src := range sources {
+		if len(src.kept) == 0 {
+			delete(s.chats, src.key)
+			s.alias[src.key] = src.lastTo
+			if s.open == src.key {
+				s.open = src.lastTo
+			}
+		} else {
+			src.chat.items = src.kept
+			src.chat.unread = 0
+			for _, it := range src.kept {
+				if it.unread {
+					src.chat.unread++
+				}
 			}
 		}
-		if m.to == s.open {
-			c.clearUnread()
+		for _, b := range src.batches {
+			c := s.chatFor(b.to)
+			c.items = mergeByTime(c.items, b.items)
+			for _, it := range b.items {
+				if it.unread {
+					c.unread++
+				}
+			}
+			if b.to == s.open {
+				c.clearUnread()
+			}
 		}
 	}
 }
@@ -313,6 +367,7 @@ func (c *chat) clearUnread() {
 func (s *Store) Open(key Key) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	key = s.resolve(key)
 	s.open = key
 	if c := s.chats[key]; c != nil {
 		c.clearUnread()
@@ -336,7 +391,10 @@ func (s *Store) peerOf(key Key) (presence.Peer, bool) {
 func (s *Store) Peer(key Key) (presence.Peer, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.peerOf(key)
+	if p, ok := s.peerOf(key); ok {
+		return p, true
+	}
+	return s.peerOf(s.resolve(key))
 }
 
 // Summaries returns one row per chat and per known peer. Chats with messages
@@ -382,12 +440,22 @@ func (s *Store) Summaries() []Summary {
 // messages. The caller holds mu.
 func (s *Store) summarize(k Key, c *chat) Summary {
 	sum := Summary{Key: k}
-	var name, addr string
 	if c != nil && len(c.items) > 0 {
 		last := c.items[len(c.items)-1].e
 		sum.Preview = Preview(last, PreviewRunes)
 		sum.LastTime = last.Time
 		sum.Unread = c.unread
+	}
+	if p, ok := s.peerOf(k); ok {
+		sum.Name, sum.OS, sum.Online, sum.LastSeen = p.Name, p.OS, p.Online, p.LastSeen
+		if ip := p.Addr.Addr(); ip.IsValid() {
+			sum.Addr = ip.Unmap().String()
+		}
+		return sum
+	}
+	// No peer: take the newest name and address the entries carry.
+	var name, addr string
+	if c != nil {
 		for i := len(c.items) - 1; i >= 0 && (name == "" || addr == ""); i-- {
 			e := &c.items[i].e
 			if name == "" {
@@ -398,13 +466,6 @@ func (s *Store) summarize(k Key, c *chat) Summary {
 			}
 		}
 	}
-	if p, ok := s.peerOf(k); ok {
-		sum.Name, sum.OS, sum.Online, sum.LastSeen = p.Name, p.OS, p.Online, p.LastSeen
-		if ip := p.Addr.Addr(); ip.IsValid() {
-			sum.Addr = ip.Unmap().String()
-		}
-		return sum
-	}
 	sum.Name = name
 	sum.Addr = normAddr(addr)
 	if strings.HasPrefix(string(k), addrPrefix) {
@@ -412,6 +473,15 @@ func (s *Store) summarize(k Key, c *chat) Summary {
 	}
 	if sum.Name == "" {
 		sum.Name = sum.Addr
+	}
+	if sum.Name == "" {
+		sum.Name = "Unknown"
+		if id := []rune(strings.TrimPrefix(string(k), idPrefix)); strings.HasPrefix(string(k), idPrefix) && len(id) > 0 {
+			if len(id) > 8 {
+				id = id[:8]
+			}
+			sum.Name = string(id)
+		}
 	}
 	return sum
 }
@@ -429,7 +499,7 @@ func (s *Store) Messages(key Key, before, limit int) (msgs []history.Entry, next
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.chats[key]
+	c := s.chats[s.resolve(key)]
 	if c == nil || before >= len(c.items) {
 		return nil, -1
 	}
