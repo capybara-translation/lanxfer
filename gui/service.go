@@ -192,6 +192,11 @@ func (s *Service) loadSavedPeers() {
 	reg := presence.NewRegistry(filepath.Join(s.cfg.ConfigDir, "peers.json"))
 	if err := reg.Load(); err != nil {
 		s.cfg.Logger.Printf("warning: could not load saved peers: %v", err)
+		if !errors.Is(err, presence.ErrCorrupt) {
+			// An unreadable file says nothing about the peers; an empty list
+			// would clear the ones the chats already have.
+			return
+		}
 	}
 	s.queue.push(work{kind: workNode, node: node.Event{Peers: reg.Peers()}})
 }

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // fileManagerCommand returns the command that shows path in the file manager.
@@ -35,14 +36,27 @@ func fileManagerCommand(goos, path string, reveal bool) (name string, args []str
 	}
 }
 
+// explorerCmdLine is the command line to give explorer.exe on Windows. A
+// Windows file name cannot contain a double quote, so quoting the path is safe.
+func explorerCmdLine(path string, reveal bool) string {
+	if reveal {
+		return `explorer.exe /select,"` + path + `"`
+	}
+	return `explorer.exe "` + path + `"`
+}
+
 // showInFileManager runs the file manager for path. It does not wait for the
 // command: explorer exits non-zero even when it works.
 func showInFileManager(path string, reveal bool) error {
 	if !filepath.IsAbs(path) {
 		return errors.New("the path is not absolute")
 	}
+	if strings.ContainsRune(path, '"') && runtime.GOOS == "windows" {
+		return errors.New("the path contains a double quote")
+	}
 	name, args := fileManagerCommand(runtime.GOOS, path, reveal)
 	cmd := exec.Command(name, args...)
+	setCmdLine(cmd, path, reveal)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

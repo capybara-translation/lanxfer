@@ -37,3 +37,19 @@ func TestShowInFileManagerNeedsAbsolutePath(t *testing.T) {
 		t.Fatal("a relative path was accepted: it could be taken for an option")
 	}
 }
+
+func TestExplorerCmdLine(t *testing.T) {
+	cases := []struct {
+		path   string
+		reveal bool
+		want   string
+	}{
+		{`C:\a b\c.txt`, true, `explorer.exe /select,"C:\a b\c.txt"`},
+		{`C:\a b`, false, `explorer.exe "C:\a b"`},
+	}
+	for _, tc := range cases {
+		if got := explorerCmdLine(tc.path, tc.reveal); got != tc.want {
+			t.Errorf("explorerCmdLine(%q, %v) = %s, want %s", tc.path, tc.reveal, got, tc.want)
+		}
+	}
+}

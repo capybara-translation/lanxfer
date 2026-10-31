@@ -608,3 +608,29 @@ func TestSaveDirBeforeStart(t *testing.T) {
 		t.Fatalf("saveDir = %q, want the saved setting %q", got, want)
 	}
 }
+
+func TestUnreadableSavedPeersKeepTheList(t *testing.T) {
+	s, em, cfgDir := newTestService(t, svcOpts{port: busyPort(t)})
+	s.store.SetPeers([]presence.Peer{testPeer})
+	// A directory where the file should be: Load fails with a read error.
+	path := filepath.Join(cfgDir, "peers.json")
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s.loadSavedPeers()
+	barrier(t, s, em)
+	if _, ok := s.store.Peer(testPeerKey); !ok {
+		t.Fatal("an unreadable peers file cleared the peer list")
+	}
+
+	// A corrupt file is different: it parses to nothing, and says so.
+	os.Remove(path)
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.loadSavedPeers()
+	barrier(t, s, em)
+	if _, ok := s.store.Peer(testPeerKey); ok {
+		t.Fatal("a corrupt peers file left the old list")
+	}
+}
