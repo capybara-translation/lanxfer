@@ -64,13 +64,26 @@ func main() {
 	})
 
 	var win *application.WebviewWindow
+	// focus says whether the main window is in front; it decides if an arrival
+	// is announced. The window starts shown. Everything that hides or shows it
+	// goes through focus, so that the check reads only atomics.
+	focus := newFocusTracker(true)
+	showMain := func() {
+		if win != nil {
+			focus.setVisible(true)
+			showWindow(win)
+		}
+	}
 	// closeNotify stops the notifier's timer or goroutine; set once it exists.
 	var closeNotify func()
 	app = application.New(application.Options{
 		Name:        "lanxfer",
 		Description: "Send files and messages to other machines on the LAN",
-		// Only the service is bound: the page shows text from other machines,
-		// and must not be able to start or stop the receiver.
+		// The page shows text from other machines, so it must not be able to
+		// start or stop the receiver: only Service is bound, and its exported
+		// methods are safe to call with anything. On Windows and Linux the
+		// system notifications service is bound as well; it is Wails' own and
+		// cannot be hidden from the page.
 		Services: append([]application.Service{application.NewService(svc)}, platformServices()...),
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -84,12 +97,8 @@ func main() {
 		},
 		// A second launch brings the first one's window forward and exits.
 		SingleInstance: &application.SingleInstanceOptions{
-			UniqueID: bundleID,
-			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
-				if win != nil {
-					showWindow(win)
-				}
-			},
+			UniqueID:               bundleID,
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) { showMain() },
 		},
 		// Quit, from the tray or Cmd+Q, must stop the sends and the receiver,
 		// and free its ports, before the process exits.
@@ -108,29 +117,27 @@ func main() {
 		URL:            "/",
 		EnableFileDrop: true,
 	})
-	// Whether the window is in front decides if an arrival is announced.
-	focus := &focusTracker{visible: win.IsVisible}
 	win.OnWindowEvent(events.Common.WindowFocus, func(*application.WindowEvent) { focus.setFocused(true) })
 	win.OnWindowEvent(events.Common.WindowLostFocus, func(*application.WindowEvent) { focus.setFocused(false) })
 	win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		focus.setFocused(false)
+		focus.setVisible(false)
 		win.Hide()
 		e.Cancel()
 	})
 	// Clicking the Dock icon brings the window back.
 	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
-		showWindow(win)
+		showMain()
 	})
 
 	// Dropped files go to the chat that is open.
 	win.OnWindowEvent(events.Common.WindowFilesDropped, svc.handleFilesDropped)
 
-	newTray(app, win, svc.saveDir)
+	newTray(app, showMain, svc.saveDir)
 
 	// A click on a notification opens that chat in the main window.
 	var n notifier
 	n, closeNotify = newPlatformNotifier(app, logger, func(key chat.Key) {
-		showWindow(win)
+		showMain()
 		app.Event.Emit(eventOpenChat, string(key))
 	})
 	svc.setNotifier(n, focus.active)

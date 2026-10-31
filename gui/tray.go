@@ -21,10 +21,10 @@ func showWindow(win *application.WebviewWindow) {
 }
 
 // newTray adds the menu bar (system tray) icon. saveDir returns the folder
-// that receives files.
-func newTray(app *application.App, win *application.WebviewWindow, saveDir func() string) *application.SystemTray {
+// that receives files; show brings the main window back.
+func newTray(app *application.App, show func(), saveDir func() string) *application.SystemTray {
 	menu := app.NewMenu()
-	menu.Add("Open lanxfer").OnClick(func(*application.Context) { showWindow(win) })
+	menu.Add("Open lanxfer").OnClick(func(*application.Context) { show() })
 	menu.Add("Open Save Folder").OnClick(func(*application.Context) {
 		dir := saveDir()
 		if dir == "" {

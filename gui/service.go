@@ -61,8 +61,9 @@ type Service struct {
 	drainD chan struct{} // closed when drain has returned
 	chatsT *throttle
 
-	loaded atomic.Bool   // the history is in store
-	ready  chan struct{} // closed when startup has finished
+	loaded   atomic.Bool   // the history is in store
+	quitting atomic.Bool   // quit has begun
+	ready    chan struct{} // closed when startup has finished
 
 	// lifeMu serializes the calls that start or stop the receiver (startup,
 	// Retry, SaveSettings, quit) and guards closed. Take it before mu.
@@ -313,8 +314,13 @@ func (s *Service) setNotifier(n notifier, windowActive func() bool) {
 
 // notifyArrival announces a received entry unless the user is looking at its
 // chat. Entries read from the history file never come through here, so the
-// start-up load raises nothing. The notifier returns at once.
+// start-up load raises nothing. It runs on the goroutine that drains the queue,
+// so it must not wait for anything: the notifier returns at once, and the
+// window state is read from atomics.
 func (s *Service) notifyArrival(e history.Entry, key chat.Key) {
+	if e.Dir != history.In || s.quitting.Load() {
+		return
+	}
 	s.mu.Lock()
 	n, active, open := s.notifier, s.windowActive, s.openKey
 	s.mu.Unlock()
@@ -325,7 +331,7 @@ func (s *Service) notifyArrival(e history.Entry, key chat.Key) {
 	if !shouldNotify(e, chat.Key(open), key, focused) {
 		return
 	}
-	n.Show(s.store.Name(key), notificationBody(e), key)
+	n.Show(notificationTitle(s.store.Name(key)), notificationBody(e), key)
 }
 
 // emitChats sends the whole list. It is the throttle's callback.
@@ -341,6 +347,7 @@ func (s *Service) emitChats() {
 // safe to call more than once.
 func (s *Service) quit() {
 	s.quitOnce.Do(func() {
+		s.quitting.Store(true)
 		s.lifeMu.Lock()
 		s.closed = true
 		s.lifeMu.Unlock()

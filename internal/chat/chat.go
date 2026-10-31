@@ -561,6 +561,16 @@ func Preview(e history.Entry, max int) string {
 	return clean(name, room) + slash + suffix
 }
 
+// Label makes text that came from another machine safe for a one-line label,
+// such as a notification title: line breaks become spaces, control and
+// bidirectional-control characters are dropped, and at most max runes are kept.
+func Label(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	return clean(s, max)
+}
+
 // clean makes s safe for a one-line label: line breaks and tabs become
 // spaces, other control and bidirectional-control characters are dropped, and
 // at most max runes are kept. It stops reading as soon as max is reached.

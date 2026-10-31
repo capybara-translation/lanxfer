@@ -4,7 +4,9 @@ package main
 
 import (
 	"log"
+	"runtime"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/capybara-translation/lanxfer/internal/chat"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -35,6 +37,7 @@ type systemNotifier struct {
 	log    *log.Logger
 	queue  chan systemNote
 	done   chan struct{}
+	closed atomic.Bool
 	nextID uint64
 }
 
@@ -62,11 +65,18 @@ func newPlatformNotifier(_ *application.App, logger *log.Logger, openChat func(c
 		}
 	})
 	go n.run()
-	return n, func() { close(n.done) }
+	return n, func() {
+		if n.closed.CompareAndSwap(false, true) {
+			close(n.done)
+		}
+	}
 }
 
-// Show queues a notification and returns at once.
+// Show queues a notification and returns at once. After Close it does nothing.
 func (n *systemNotifier) Show(title, body string, key chat.Key) {
+	if n.closed.Load() {
+		return
+	}
 	select {
 	case n.queue <- systemNote{title, body, key}:
 	default:
@@ -90,8 +100,8 @@ func (n *systemNotifier) run() {
 			n.nextID++
 			err := n.svc.SendNotification(notifications.NotificationOptions{
 				ID:    "lanxfer-" + strconv.FormatUint(n.nextID, 10),
-				Title: note.title,
-				Body:  note.body,
+				Title: systemText(runtime.GOOS, note.title),
+				Body:  systemText(runtime.GOOS, note.body),
 				// The key comes back in the response when the user clicks.
 				Data: map[string]interface{}{"key": string(note.key)},
 			})

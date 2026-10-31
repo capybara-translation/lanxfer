@@ -1,7 +1,9 @@
 // The page of the small notification window (macOS only; Windows and Linux
 // use the system's own notifications). Go sends the text in a "toast-show"
-// event and clears it with "toast-clear". A click is reported back as
-// "toast-click" without a payload: Go knows which chat the toast is for.
+// event and shows the window once this page answers "toast-shown" with the same
+// seq. The text stays in place when the window hides, until the next toast
+// replaces it. A click is reported back as "toast-click" without a payload: Go
+// knows which chat the toast is for.
 //
 // The text comes from another machine, so it is set with textContent only.
 
@@ -18,17 +20,14 @@ function render(t: string, b: string): void {
     card.hidden = false;
 }
 
-function clear(): void {
-    title.textContent = "";
-    body.textContent = "";
-    card.hidden = true;
-}
-
 Events.On("toast-show", (e) => {
-    const d = e.data as { title?: unknown; body?: unknown } | null;
+    const d = e.data as { title?: unknown; body?: unknown; seq?: unknown } | null;
     render(typeof d?.title === "string" ? d.title : "", typeof d?.body === "string" ? d.body : "");
+    // The text is in the document now; Go may show the window.
+    if (typeof d?.seq === "number") {
+        Events.Emit("toast-shown", d.seq).catch(() => {});
+    }
 });
-Events.On("toast-clear", clear);
 
 card.addEventListener("click", () => {
     Events.Emit("toast-click", null).catch(() => {});

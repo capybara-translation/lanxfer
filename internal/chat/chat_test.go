@@ -286,6 +286,27 @@ func TestNameFollowsAlias(t *testing.T) {
 	}
 }
 
+func TestLabel(t *testing.T) {
+	tests := []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"plain", 64, "plain"},
+		{"two\nlines\ttab", 64, "two lines tab"},
+		{"a" + rlo + "b" + lri + "c" + rlm + "d" + nel + "e", 64, "abcde"},
+		{"a" + string(rune(0x2028)) + "b" + string(rune(0x2029)) + "c", 64, "a b c"},
+		{strings.Repeat("x", 100), 64, strings.Repeat("x", 64)},
+		{"héllo", 3, "hél"},
+		{"x", 0, ""},
+	}
+	for _, tt := range tests {
+		if got := Label(tt.in, tt.max); got != tt.want {
+			t.Errorf("Label(%q, %d) = %q, want %q", tt.in, tt.max, got, tt.want)
+		}
+	}
+}
+
 func TestPeerWithoutIDHasNameKey(t *testing.T) {
 	s := New()
 	s.SetPeers([]presence.Peer{peer("", "Win", "10.0.0.5", true, at(0))})

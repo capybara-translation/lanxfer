@@ -110,30 +110,72 @@ func TestNotificationBody(t *testing.T) {
 }
 
 func TestFocusTracker(t *testing.T) {
-	visible := true
-	f := &focusTracker{visible: func() bool { return visible }}
+	f := newFocusTracker(true)
 	if f.active() {
-		t.Error("a new tracker reports an active window")
+		t.Error("a new tracker reports an active window before any focus event")
 	}
 	f.setFocused(true)
 	if !f.active() {
 		t.Error("focused and visible should be active")
 	}
-	visible = false
+	f.setVisible(false)
 	if f.active() {
 		t.Error("a focused window that is hidden must not count as active")
 	}
-	visible = true
+	f.setVisible(true)
+	if !f.active() {
+		t.Error("showing the window again should restore the active state")
+	}
 	f.setFocused(false)
 	if f.active() {
 		t.Error("blur should clear the active state")
 	}
 
-	// Without a visibility check the focus alone decides.
-	g := &focusTracker{}
+	// A window that starts hidden is not active even after a focus event.
+	g := newFocusTracker(false)
 	g.setFocused(true)
-	if !g.active() {
-		t.Error("focus alone should be active when no visibility check is set")
+	if g.active() {
+		t.Error("a hidden window must not be active")
+	}
+}
+
+func TestSystemText(t *testing.T) {
+	in := `<a href="http://x">&click</a>`
+	if got, want := systemText("linux", in), `&lt;a href="http://x"&gt;&amp;click&lt;/a&gt;`; got != want {
+		t.Errorf("linux = %q, want %q", got, want)
+	}
+	for _, goos := range []string{"windows", "darwin"} {
+		if got := systemText(goos, in); got != in {
+			t.Errorf("%s changed the text: %q", goos, got)
+		}
+	}
+	// Already-escaped text is escaped again, not left as markup.
+	if got := systemText("linux", "&lt;"); got != "&amp;lt;" {
+		t.Errorf("linux double escape = %q", got)
+	}
+}
+
+func TestNotificationTitle(t *testing.T) {
+	rlo := string(rune(0x202E))
+	nel := string(rune(0x0085))
+	ls := string(rune(0x2028))
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "other", "other"},
+		{"controls and bidi are removed", "a" + rlo + "b" + nel + "c\nd" + ls + "e", "abc d e"},
+		{"long names are cut at 64 runes", strings.Repeat("n", 100), strings.Repeat("n", 64)},
+		{"nothing left falls back", rlo + nel, "Unknown"},
+		{"empty falls back", "", "Unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := notificationTitle(tt.in); got != tt.want {
+				t.Errorf("notificationTitle(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -200,12 +242,19 @@ func (f *fakeToastWindow) count(call string) int {
 // newReadyToaster returns a toaster whose page has said it is ready.
 func newReadyToaster(t *testing.T, w toastWindow, d time.Duration, open func(chat.Key)) *toaster {
 	t.Helper()
+	ts := newHeldToaster(t, w, toasterConfig{Duration: d}, open)
+	ts.pageReady()
+	return ts
+}
+
+// newHeldToaster returns a toaster whose page has not said it is ready.
+func newHeldToaster(t *testing.T, w toastWindow, cfg toasterConfig, open func(chat.Key)) *toaster {
+	t.Helper()
 	if open == nil {
 		open = func(chat.Key) {}
 	}
-	ts := newToaster(w, open, d)
+	ts := newToaster(w, open, cfg)
 	t.Cleanup(ts.Close)
-	ts.pageReady()
 	return ts
 }
 
@@ -228,17 +277,20 @@ func TestToasterShowsThenHides(t *testing.T) {
 
 func TestToasterReplacesContentAndExtendsTime(t *testing.T) {
 	w := &fakeToastWindow{}
-	const d = 150 * time.Millisecond
+	// Wide margins: 250 ms either side of every deadline, so a loaded machine
+	// does not make the test flaky.
+	const d = 600 * time.Millisecond
 	ts := newReadyToaster(t, w, d, nil)
 
 	ts.Show("a", "first", "id:A")
 	waitFor(t, "the first toast", func() bool { return w.count("present") == 1 })
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(350 * time.Millisecond)
 	ts.Show("b", "second", "id:B")
 	waitFor(t, "the second toast", func() bool { return w.count("present") == 2 })
 
-	// 100 ms + 100 ms is past the first deadline but within the extended one.
-	time.Sleep(100 * time.Millisecond)
+	// 350 ms + 350 ms is past the first deadline (600 ms) but well within the
+	// extended one (350 ms + 600 ms).
+	time.Sleep(350 * time.Millisecond)
 	if n := w.count("dismiss"); n != 0 {
 		t.Fatalf("the toast was hidden %d times before the extended deadline", n)
 	}
@@ -296,8 +348,7 @@ func TestToasterClickWithoutToastIsIgnored(t *testing.T) {
 
 func TestToasterWaitsForThePage(t *testing.T) {
 	w := &fakeToastWindow{}
-	ts := newToaster(w, func(chat.Key) {}, time.Minute)
-	t.Cleanup(ts.Close)
+	ts := newHeldToaster(t, w, toasterConfig{Duration: time.Minute}, nil)
 
 	ts.Show("a", "early", "id:A")
 	time.Sleep(50 * time.Millisecond)
@@ -336,7 +387,7 @@ func TestToasterShowDoesNotBlock(t *testing.T) {
 
 func TestToasterCloseStopsTheTimer(t *testing.T) {
 	w := &fakeToastWindow{}
-	ts := newToaster(w, func(chat.Key) {}, 80*time.Millisecond)
+	ts := newToaster(w, func(chat.Key) {}, toasterConfig{Duration: 80 * time.Millisecond})
 	ts.pageReady()
 	ts.Show("a", "x", "id:A")
 	waitFor(t, "the toast", func() bool { return w.count("present") == 1 })
@@ -351,6 +402,75 @@ func TestToasterCloseStopsTheTimer(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if n := w.count("present"); n != 1 {
 		t.Errorf("presented %d times, want 1", n)
+	}
+}
+
+func TestToasterDropsContentOlderThanTheToast(t *testing.T) {
+	w := &fakeToastWindow{}
+	ts := newHeldToaster(t, w, toasterConfig{Duration: 100 * time.Millisecond}, nil)
+	ts.Show("a", "stale", "id:A")
+	time.Sleep(250 * time.Millisecond)
+	ts.pageReady()
+	time.Sleep(100 * time.Millisecond)
+	if n := w.count("present"); n != 0 {
+		t.Errorf("a toast older than its own duration was shown (%d presentations)", n)
+	}
+	// Newer content still goes through.
+	ts.Show("b", "fresh", "id:B")
+	waitFor(t, "the fresh toast", func() bool { return w.count("present") == 1 })
+}
+
+func TestToasterResendsAfterPageReload(t *testing.T) {
+	w := &fakeToastWindow{}
+	ts := newReadyToaster(t, w, time.Minute, nil)
+	ts.Show("a", "current", "id:A")
+	waitFor(t, "the toast", func() bool { return w.count("present") == 1 })
+
+	// The page reloaded and says it is ready again: the toast on screen is
+	// sent again.
+	ts.pageReady()
+	waitFor(t, "the content to be sent again", func() bool { return w.count("present") == 2 })
+	_, p := w.snapshot()
+	if p[1].Body != "current" {
+		t.Errorf("resent %+v", p[1])
+	}
+}
+
+func TestToasterLogsOnceWhenThePageNeverComes(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		lines = append(lines, format)
+		mu.Unlock()
+	}
+	ts := newHeldToaster(t, &fakeToastWindow{}, toasterConfig{
+		Duration: time.Minute, ReadyWait: 50 * time.Millisecond, Logf: logf,
+	}, nil)
+	ts.Show("a", "x", "id:A")
+	waitFor(t, "the warning", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(lines) == 1
+	})
+	time.Sleep(150 * time.Millisecond)
+	mu.Lock()
+	n := len(lines)
+	mu.Unlock()
+	if n != 1 {
+		t.Errorf("logged %d times, want once", n)
+	}
+}
+
+func TestToasterDoesNotLogWhenThePageComes(t *testing.T) {
+	var n atomic.Int32
+	ts := newHeldToaster(t, &fakeToastWindow{}, toasterConfig{
+		Duration: time.Minute, ReadyWait: 50 * time.Millisecond, Logf: func(string, ...any) { n.Add(1) },
+	}, nil)
+	ts.pageReady()
+	time.Sleep(150 * time.Millisecond)
+	if n.Load() != 0 {
+		t.Error("logged although the page was ready")
 	}
 }
 
@@ -456,6 +576,58 @@ func TestServiceDoesNotNotifyForLoadedHistory(t *testing.T) {
 	barrier(t, s, em)
 	if got := rec.all(); len(got) != 0 {
 		t.Fatalf("notified for the loaded history: %+v", got)
+	}
+}
+
+func TestServiceSanitizesTheTitle(t *testing.T) {
+	s, em, _ := newTestService(t, svcOpts{})
+	rec := &recordingNotifier{}
+	s.setNotifier(rec, func() bool { return false })
+
+	rlo := string(rune(0x202E))
+	p := testPeer
+	p.Name = "ev" + rlo + "il\nname" + strings.Repeat("z", 100)
+	s.app.cfg.OnEvent(node.Event{Peers: []presence.Peer{p}})
+	text := incoming(history.KindText)
+	text.Text = "hi"
+	s.app.cfg.OnEvent(node.Event{Entry: &text})
+	barrier(t, s, em)
+
+	got := rec.all()
+	if len(got) != 1 {
+		t.Fatalf("notifications = %+v", got)
+	}
+	if strings.ContainsAny(got[0].Title, rlo+"\n") || len([]rune(got[0].Title)) > 64 {
+		t.Errorf("title not cleaned: %q", got[0].Title)
+	}
+	if !strings.HasPrefix(got[0].Title, "evil name") {
+		t.Errorf("title = %q", got[0].Title)
+	}
+}
+
+func TestServiceSentEntryDoesNotAskTheWindow(t *testing.T) {
+	s, _, _ := newTestService(t, svcOpts{})
+	rec := &recordingNotifier{}
+	s.setNotifier(rec, func() bool {
+		t.Error("the window state was read for an entry that cannot notify")
+		return false
+	})
+	out := incoming(history.KindText)
+	out.Dir = history.Out
+	s.notifyArrival(out, testPeerKey)
+}
+
+func TestServiceDoesNotNotifyWhileQuitting(t *testing.T) {
+	s, _, _ := newTestService(t, svcOpts{})
+	rec := &recordingNotifier{}
+	s.setNotifier(rec, func() bool {
+		t.Error("the window state was read while quitting")
+		return false
+	})
+	s.quit()
+	s.notifyArrival(incoming(history.KindText), testPeerKey)
+	if got := rec.all(); len(got) != 0 {
+		t.Errorf("notified while quitting: %+v", got)
 	}
 }
 
