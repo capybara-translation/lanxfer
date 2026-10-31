@@ -85,8 +85,11 @@ The app uses the same config folder as the CLI (see
 history. Its own settings are in `gui.json` there. It listens on port `8425`
 like `lanxfer recv`, so the two cannot run on one machine at the same time.
 If the port is taken, the app shows `Not receiving` with a Retry button;
-sending still works. For development, the environment variable
-`LANXFER_PORT` moves the app to another port.
+sending still works. While the app is not the receiver, it shows only what
+it records itself. Files and messages that `lanxfer recv` receives, and what
+the CLI sends, go to the shared history but appear in the app after it is
+restarted, because the app reads the history once at start. For development,
+the environment variable `LANXFER_PORT` moves the app to another port.
 
 ### Build the app
 
@@ -112,8 +115,8 @@ Notification Center: macOS refuses its notification API to an app that is
 not signed with a developer certificate. Clicking a notification opens that
 chat.
 
-Only macOS has been run so far. The Windows and Linux builds compile, but
-the app has not been run on either.
+Only macOS has been run. The Windows code passes `go vet` but has not been
+run. Linux has not been compiled or run.
 
 ### GUI security notes
 
