@@ -8,6 +8,7 @@ import {Composer} from "./composer.js";
 import {byId, errorText} from "./dom.js";
 import {PeerList} from "./list.js";
 import {currentOS} from "./platform.js";
+import {Notice} from "./notice.js";
 import {SettingsDialog} from "./settings.js";
 import {Store} from "./state.js";
 import {Toast} from "./toast.js";
@@ -19,6 +20,7 @@ const os = currentOS();
 const store = new Store();
 const live = new LiveTransfers();
 const toast = new Toast(byId("toast"));
+const notice = new Notice(byId("notice"), byId("notice-text"), byId<HTMLButtonElement>("notice-dismiss"));
 
 new TopBar(byId("topbar"), byId("topbar-message"), byId<HTMLButtonElement>("topbar-retry"), store, toast);
 
@@ -102,7 +104,7 @@ on("open-chat", (e) => {
         selectChat(e.data, true);
     }
 });
-on("drop-ignored", (e) => toast.show(e.data.reason));
+on("drop-ignored", (e) => notice.show(e.data.reason));
 
 on("message", (e) => {
     const {key, entry} = e.data;

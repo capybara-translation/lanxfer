@@ -2,7 +2,7 @@
 // Cancel button. One CardView lives as long as its item and is updated in
 // place by each progress event.
 
-import {el} from "./dom.js";
+import {el, setText} from "./dom.js";
 import {formatDuration, formatPercent, formatSize, formatSpeed, percent, plural} from "./format.js";
 import type {Card} from "./transfers.js";
 
@@ -42,11 +42,8 @@ export class CardView {
         const u = card.update;
         const folder = u.Folder;
 
-        const nameText = u.Name + (folder ? "/" : "");
-        if (this.name.textContent !== nameText) {
-            this.name.textContent = nameText;
-        }
-        this.size.textContent = this.sizeText(card);
+        setText(this.name, u.Name + (folder ? "/" : ""));
+        setText(this.size, this.sizeText(card));
 
         const queued = card.updates <= 1 && !u.Done;
         const scanning = folder && u.Total === 0 && !u.Done;
@@ -59,23 +56,20 @@ export class CardView {
             this.bar.setAttribute("aria-valuenow", String(Math.round(pct)));
         }
 
-        this.status.classList.remove("error");
+        this.status.classList.toggle("error", u.Done && u.Status !== "ok" && u.Status !== "cancelled");
         if (u.Done) {
-            this.status.textContent = this.doneText(card);
-            if (u.Status === "failed") {
-                this.status.classList.add("error");
-            }
+            setText(this.status, this.doneText(card));
         } else if (card.cancelling) {
-            this.status.textContent = "Cancelling…";
+            setText(this.status, "Cancelling…");
         } else if (queued) {
-            this.status.textContent = "Queued";
+            setText(this.status, "Queued");
         } else if (scanning) {
-            this.status.textContent = "Scanning…";
+            setText(this.status, "Scanning…");
         } else {
-            this.status.textContent = this.progressText(card, nowMs);
+            setText(this.status, this.progressText(card, nowMs));
         }
 
-        this.extra.textContent = u.Skipped > 0 ? `${plural(u.Skipped, "item")} skipped` : "";
+        setText(this.extra, u.Skipped > 0 ? `${plural(u.Skipped, "item")} skipped` : "");
         this.cancel.hidden = u.Done;
         this.cancel.disabled = card.cancelling;
     }

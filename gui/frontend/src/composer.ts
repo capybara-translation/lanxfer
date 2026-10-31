@@ -19,6 +19,11 @@ export interface ComposerElements {
 }
 
 export class Composer {
+    // Unsent text per chat. The box is shared, so without this a draft written
+    // for one peer would be sent to the next one selected.
+    private drafts = new Map<string, string>();
+    private currentKey = "";
+
     constructor(
         private els: ComposerElements,
         private store: Store,
@@ -36,8 +41,27 @@ export class Composer {
         });
         input.addEventListener("input", () => this.refresh());
         send.addEventListener("click", () => void this.submit());
-        store.onSelection(() => this.refresh());
+        store.onSelection(() => this.switchDraft());
         this.refresh();
+    }
+
+    // switchDraft keeps the text of the chat that was open and shows the draft
+    // of the one that is open now.
+    private switchDraft(): void {
+        const key = this.store.selectedKey;
+        if (key !== this.currentKey) {
+            this.saveDraft(this.currentKey, this.els.input.value);
+            this.els.input.value = this.drafts.get(key) ?? "";
+            this.drafts.delete(key);
+            this.currentKey = key;
+        }
+        this.refresh();
+    }
+
+    private saveDraft(key: string, text: string): void {
+        if (key !== "" && text !== "") {
+            this.drafts.set(key, text);
+        }
     }
 
     focus(): void {
@@ -75,7 +99,12 @@ export class Composer {
         try {
             await api.sendText(key, text);
         } catch (err) {
-            if (input.value === "" && this.store.selectedKey === key) {
+            if (this.store.selectedKey !== key) {
+                // The user moved on: the text goes back to its own chat.
+                if (!this.drafts.has(key)) {
+                    this.drafts.set(key, text);
+                }
+            } else if (input.value === "") {
                 input.value = text;
                 this.refresh();
             }

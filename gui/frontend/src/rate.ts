@@ -53,9 +53,4 @@ export class RateEstimator {
         }
         return (total - sent) / speed;
     }
-
-    // lastUpdateAt is the time of the newest sample (-1 if none).
-    lastUpdateAt(): number {
-        return this.lastAt;
-    }
 }

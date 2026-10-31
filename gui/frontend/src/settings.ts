@@ -18,6 +18,8 @@ export interface SettingsElements {
 
 export class SettingsDialog {
     private busy = false;
+    // The saved values were read; Save stays off until they were.
+    private loaded = false;
 
     constructor(private els: SettingsElements, private toast: Toast) {
         els.overlay.hidden = true;
@@ -43,14 +45,21 @@ export class SettingsDialog {
         const {name, saveDir, error, overlay} = this.els;
         error.textContent = "";
         overlay.hidden = false;
+        // Do not show or save what an earlier visit left in the fields.
+        this.loaded = false;
+        name.value = "";
+        saveDir.value = "";
         name.disabled = true;
         saveDir.disabled = true;
+        this.els.save.disabled = true;
         try {
             const v = await api.settings();
             name.value = v.name;
             saveDir.value = v.saveDir;
             name.disabled = false;
             saveDir.disabled = false;
+            this.els.save.disabled = false;
+            this.loaded = true;
             name.focus();
         } catch (err) {
             error.textContent = `Could not read the settings: ${errorText(err)}`;
@@ -64,7 +73,7 @@ export class SettingsDialog {
     }
 
     private async save(): Promise<void> {
-        if (this.busy) {
+        if (this.busy || !this.loaded) {
             return;
         }
         const {name, saveDir, error, save, close} = this.els;

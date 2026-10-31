@@ -49,3 +49,11 @@ export function errorText(err: unknown): string {
     }
     return String(err);
 }
+
+// setText writes text only when it changed, which keeps a text selection and
+// accessibility announcements calm when a value is refreshed every second.
+export function setText(node: HTMLElement, text: string): void {
+    if (node.textContent !== text) {
+        node.textContent = text;
+    }
+}

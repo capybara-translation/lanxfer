@@ -37,8 +37,10 @@ export function sendShortcut(os: OS): string {
 }
 
 // isSendKey tells whether a key press in the message box sends the message.
-export function isSendKey(os: OS, e: { key: string; metaKey: boolean; ctrlKey: boolean; isComposing?: boolean }): boolean {
-    if (e.key !== "Enter" || e.isComposing) {
+export function isSendKey(os: OS, e: { key: string; metaKey: boolean; ctrlKey: boolean; isComposing?: boolean; keyCode?: number }): boolean {
+    // keyCode 229 marks a key handled by an input method; WKWebView does not
+    // always set isComposing for the Enter that confirms a conversion.
+    if (e.key !== "Enter" || e.isComposing || e.keyCode === 229) {
         return false;
     }
     return os === "mac" ? e.metaKey : e.ctrlKey;

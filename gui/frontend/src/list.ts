@@ -1,7 +1,7 @@
 // The peer list on the left.
 
 import type {Summary} from "./api.js";
-import {el} from "./dom.js";
+import {el, setText} from "./dom.js";
 import {formatRelative, parseTime} from "./format.js";
 import type {Store} from "./state.js";
 
@@ -79,28 +79,20 @@ export class PeerList {
         row.root.classList.toggle("offline", !s.Online);
         row.root.classList.toggle("selected", s.Key === this.store.selectedKey);
         row.root.setAttribute("aria-current", s.Key === this.store.selectedKey ? "true" : "false");
-        set(row.mark, s.Online ? "●" : "○");
+        setText(row.mark, s.Online ? "●" : "○");
         row.mark.title = s.Online ? "Online" : "Offline";
-        set(row.name, s.Name);
-        set(row.os, s.OS);
-        set(row.badge, s.Unread > 0 ? (s.Unread > 99 ? "99+" : String(s.Unread)) : "");
+        setText(row.name, s.Name);
+        setText(row.os, s.OS);
+        setText(row.badge, s.Unread > 0 ? (s.Unread > 99 ? "99+" : String(s.Unread)) : "");
         row.badge.hidden = s.Unread <= 0;
-        set(row.preview, s.Preview);
+        setText(row.preview, s.Preview);
         row.preview.hidden = s.Preview === "";
         if (s.Online) {
-            set(row.seen, "");
+            setText(row.seen, "");
         } else {
             const seen = parseTime(s.LastSeen);
-            set(row.seen, seen === null ? "Offline" : `Last seen ${formatRelative(seen, now)}`);
+            setText(row.seen, seen === null ? "Offline" : `Last seen ${formatRelative(seen, now)}`);
         }
         row.seen.hidden = s.Online;
-    }
-}
-
-// set writes text only when it changed, which keeps text selection and
-// accessibility announcements calm.
-function set(node: HTMLElement, text: string): void {
-    if (node.textContent !== text) {
-        node.textContent = text;
     }
 }

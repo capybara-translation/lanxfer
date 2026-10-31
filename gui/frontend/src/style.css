@@ -104,6 +104,28 @@ button:disabled {
     color: inherit;
 }
 
+.notice {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    background: var(--accent-soft);
+    border-bottom: 1px solid var(--border);
+}
+
+.notice span {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.notice button {
+    padding: 3px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+}
+
 /* ---- layout ---- */
 
 #main {

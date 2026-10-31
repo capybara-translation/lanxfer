@@ -18,6 +18,8 @@ const BOTTOM_SLACK = 32;
 const TOP_TRIGGER = 120;
 // A new message is compared with this many of the newest to skip repeats.
 const DUPLICATE_WINDOW = 50;
+// Failed refreshes show a message at most this often.
+const SYNC_ERROR_TOAST_MS = 30_000;
 
 export interface ChatElements {
     pane: HTMLElement;
@@ -42,6 +44,7 @@ export class ChatView {
     private token = 0;
     private syncing = false;
     private syncAgain = false;
+    private lastSyncError = 0;
 
     private list = el("div", {cls: "entries"});
     private older = el("div", {cls: "older"});
@@ -92,7 +95,9 @@ export class ChatView {
                 const later = (this.pending ?? []).filter((e) => !seen.has(entryKey(e)));
                 this.pending = null;
                 this.next = page.next;
-                this.append(messages.concat(later), false);
+                this.append(messages, false);
+                // These arrived after the page was cut, so they shift "before".
+                this.append(later, false, true);
                 this.updateOlderLabel();
                 this.updateEmpty();
                 this.scrollToBottom();
@@ -204,7 +209,10 @@ export class ChatView {
         this.els.status.classList.toggle("online", online);
     }
 
-    private append(entries: Entry[], stick: boolean): void {
+    // append adds entries at the end. live is true for entries that arrived
+    // after the page the offset (next) was taken from: Go counts "before" from
+    // the newest message, so each one moves the next older page by one.
+    private append(entries: Entry[], stick: boolean, live = false): void {
         const frag = document.createDocumentFragment();
         for (const e of entries) {
             this.entries.push(e);
@@ -212,6 +220,9 @@ export class ChatView {
             frag.appendChild(renderEntry(e, this.ctx));
         }
         this.list.appendChild(frag);
+        if (live && this.next >= 0) {
+            this.next += entries.length;
+        }
         if (stick) {
             this.scrollToBottom();
         }
@@ -223,7 +234,7 @@ export class ChatView {
         if (this.entryKeys.indexOf(k, from) >= 0) {
             return;
         }
-        this.append([e], false);
+        this.append([e], false, true);
     }
 
     private updateEmpty(): void {
@@ -329,7 +340,10 @@ export class ChatView {
             if (token !== this.token) {
                 return false;
             }
-            const messages = page.messages ?? [];
+            // Drop what is already shown: a merge in the middle of the list can
+            // also shift the offsets.
+            const have = new Set(this.entryKeys);
+            const messages = (page.messages ?? []).filter((e) => !have.has(entryKey(e)));
             const s = this.els.scroller;
             const before = s.scrollHeight;
             const frag = document.createDocumentFragment();
@@ -382,11 +396,16 @@ export class ChatView {
             }
             const fresh = messages.slice(at + 1);
             if (fresh.length > 0) {
-                this.append(fresh, stick);
+                this.append(fresh, stick, true);
                 this.updateEmpty();
             }
         } catch (err) {
             console.error(err);
+            const now = Date.now();
+            if (now - this.lastSyncError > SYNC_ERROR_TOAST_MS) {
+                this.lastSyncError = now;
+                this.toast.show(`Could not refresh the chat: ${errorText(err)}`);
+            }
         } finally {
             this.syncing = false;
             if (this.syncAgain && token === this.token) {
