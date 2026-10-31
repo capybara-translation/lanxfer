@@ -64,10 +64,15 @@ type Config struct {
 	// event with the saved list (possibly empty) is sent once at startup.
 	// It may be called concurrently from several goroutines (HTTP handlers
 	// for entries, a background goroutine for peers), and some calls are
-	// made while the node holds internal locks. It must return quickly: hand
-	// the event to a channel or another goroutine instead of doing slow
-	// work. It is never called after Wait returns, so it is safe to close a
-	// channel it sends to once Wait has returned.
+	// made while the node holds internal locks; Record calls it from the
+	// calling goroutine. It must return quickly: hand the event to a channel
+	// or another goroutine instead of doing slow work. It may run before Start
+	// returns, so it must not use the returned *Node without its own
+	// synchronization. It must not call Record or wait on the node: events are
+	// delivered under a read lock that shutdown takes for writing, so waiting
+	// on the node from here can deadlock. It is never called after Wait
+	// returns, so it is safe to close a channel it sends to once Wait has
+	// returned.
 	OnEvent func(Event)
 	// AnnounceEvery and ProbeEvery default to 60 s and 30 s when zero.
 	AnnounceEvery, ProbeEvery time.Duration
@@ -252,19 +257,25 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 	go func() {
 		defer close(n.done) // runs last: Wait returns only after everything below
 		defer events.close()
+		// A serve failure goes through the same shutdown as a cancel, so the
+		// uploads in progress are cleaned up and the peers are saved.
+		var serveFailure error
+		served := false
 		select {
-		case err := <-serveErr:
-			stopBackground()
-			n.err = err
-			return
+		case serveFailure = <-serveErr:
+			served = true
+			logger.Printf("HTTP server stopped: %v", serveFailure)
 		case <-ctx.Done():
+			logger.Printf("shutting down")
 		}
 
-		logger.Printf("shutting down")
 		// Close, not Shutdown: Shutdown would let transfers run to the end, but
 		// the caller asked to stop now. Closing the connections makes each
 		// upload in progress fail and delete its temporary file.
 		srv.Close()
+		if !served {
+			<-serveErr // Serve has returned: the listener is closed
+		}
 		waitCtx, waitCancel := context.WithTimeout(context.Background(), shutdownWait)
 		defer waitCancel()
 		if err := receiver.WaitUploads(waitCtx); err != nil {
@@ -275,14 +286,15 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 		if err := reg.Save(); err != nil {
 			logger.Printf("warning: could not save peers: %v", err)
 		}
+		n.err = serveFailure
 	}()
 	return n, nil
 }
 
 // Wait blocks until the context given to Start is cancelled and the node has
-// shut down, and returns nil. If the HTTP server fails while running, it
-// shuts down at once and Wait returns that error. Wait is meant to be called
-// once.
+// shut down, and returns nil. Both ports are free when it returns. If the HTTP
+// server fails while running, the node shuts down at once, in the same way,
+// and Wait returns that error. Wait is meant to be called once.
 func (n *Node) Wait() error {
 	<-n.done
 	return n.err
@@ -299,11 +311,14 @@ func (n *Node) ID() string {
 }
 
 // Record adds e to the history, if there is one, and reports it as an Event.
-// Without a history it only reports the event and returns nil. An entry the
-// history refuses is not reported. Time defaults to now, and V is set. After
-// shutdown the history is still written, but no event is sent.
+// Without a history it only reports the event. An invalid entry is refused
+// with an error in both cases and not reported. Time defaults to now, and V is
+// set. After shutdown the history is still written, but no event is sent.
 func (n *Node) Record(e history.Entry) error {
 	e = stamp(e)
+	if err := e.Validate(); err != nil {
+		return err
+	}
 	if n.store != nil {
 		if err := n.store.Append(e); err != nil {
 			return err

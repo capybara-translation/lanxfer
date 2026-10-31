@@ -784,6 +784,14 @@ func TestRecordWithoutHistoryEmits(t *testing.T) {
 	if ev.Entry.Text != "sent" || ev.Entry.Time.IsZero() || ev.Entry.V != history.Version {
 		t.Errorf("event entry = %+v", *ev.Entry)
 	}
+
+	// Validation does not depend on whether there is a history.
+	if err := h.node.Record(history.Entry{Dir: history.Out}); err == nil {
+		t.Error("Record accepted an invalid entry")
+	}
+	if got := h.drainEntries(100 * time.Millisecond); len(got) != 0 {
+		t.Errorf("event for an invalid entry: %+v", got)
+	}
 }
 
 func TestPeersReturnsList(t *testing.T) {
@@ -912,5 +920,35 @@ func TestRunIsStartThenWait(t *testing.T) {
 		}
 	case <-time.After(waitTimeout):
 		t.Fatal("Run did not return after cancel")
+	}
+}
+
+func TestStartAgainOnSamePortAfterWait(t *testing.T) {
+	port := freePort(t)
+	for i := 0; i < 5; i++ {
+		cfg := Config{
+			SaveDir:   filepath.Join(t.TempDir(), "save"),
+			ConfigDir: filepath.Join(t.TempDir(), "config"),
+			Port:      port,
+			MaxSize:   1 << 20,
+			Name:      "n",
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		n, err := Start(ctx, cfg)
+		if err != nil {
+			cancel()
+			t.Fatalf("Start #%d: %v", i, err)
+		}
+		cancel() // at once, while the serve goroutine may not have started
+		done := make(chan error, 1)
+		go func() { done <- n.Wait() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Wait #%d = %v, want nil", i, err)
+			}
+		case <-time.After(waitTimeout):
+			t.Fatalf("Wait #%d did not return", i)
+		}
 	}
 }
