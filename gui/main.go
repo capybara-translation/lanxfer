@@ -51,13 +51,25 @@ func main() {
 		logger.Printf("warning: cannot locate the config folder: %v", err)
 	}
 
-	backend := NewApp(appConfig{ConfigDir: configDir, Port: portFromEnv(logger), Logger: logger})
+	// The service needs the app to emit events and open the file manager, and
+	// the app needs the service, so these closures read app once it exists.
+	// They run only after app.Run has started.
+	var app *application.App
+	svc := newService(serviceConfig{
+		ConfigDir: configDir,
+		Port:      portFromEnv(logger),
+		Logger:    logger,
+		Emitter:   wailsEmitter{app: func() *application.App { return app }},
+		Reveal:    func(path string) error { return app.Env.OpenFileManager(path, true) },
+	})
 
 	var win *application.WebviewWindow
-	app := application.New(application.Options{
+	app = application.New(application.Options{
 		Name:        "lanxfer",
 		Description: "Send files and messages to other machines on the LAN",
-		Services:    []application.Service{application.NewService(backend)},
+		// Only the service is bound: the page shows text from other machines,
+		// and must not be able to start or stop the receiver.
+		Services: []application.Service{application.NewService(svc)},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -77,9 +89,9 @@ func main() {
 				}
 			},
 		},
-		// Quit, from the tray or Cmd+Q, must stop the receiver and free its
-		// ports before the process exits.
-		OnShutdown: backend.Stop,
+		// Quit, from the tray or Cmd+Q, must stop the sends and the receiver,
+		// and free its ports, before the process exits.
+		OnShutdown: svc.quit,
 	})
 
 	win = app.Window.NewWithOptions(application.WebviewWindowOptions{
@@ -98,11 +110,16 @@ func main() {
 		showWindow(win)
 	})
 
-	newTray(app, win, func() string { return backend.loadSettings().SaveDir })
+	// Dropped files go to the chat that is open.
+	win.OnWindowEvent(events.Common.WindowFilesDropped, svc.handleFilesDropped)
 
-	backend.Start()
+	newTray(app, win, svc.app.SaveDir)
 
+	// The service loads the history and starts the receiver in ServiceStartup.
 	if err := app.Run(); err != nil {
+		// log.Fatal skips the deferred calls and OnShutdown may not have run,
+		// so free the ports here.
+		svc.quit()
 		logger.Printf("fatal: %v", err)
 		logFile.Close()
 		log.Fatal(err)

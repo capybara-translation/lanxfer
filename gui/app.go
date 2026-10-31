@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -9,8 +10,13 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/capybara-translation/lanxfer/internal/history"
 	"github.com/capybara-translation/lanxfer/internal/node"
 )
+
+// historyFileName is the history file inside the lanxfer config folder, the
+// same one "lanxfer recv" writes.
+const historyFileName = "history.jsonl"
 
 const (
 	// defaultPort is the receiver's TCP and UDP port, as in "lanxfer recv".
@@ -22,8 +28,8 @@ const (
 // NodeState says whether the receiver is running. Error explains why it is
 // not, and is empty after a plain Stop.
 type NodeState struct {
-	Running bool
-	Error   string
+	Running bool   `json:"running"`
+	Error   string `json:"error"`
 }
 
 // appConfig is what App needs from its surroundings; tests replace it.
@@ -31,6 +37,13 @@ type appConfig struct {
 	ConfigDir string // "" when the config folder cannot be located
 	Port      int
 	Logger    *log.Logger
+	// OnEvent receives the node's events. It is called on the node's
+	// goroutines, under its locks, so it must return at once and must not
+	// call back into App.
+	OnEvent func(node.Event)
+	// OnState is called, with App's lock held, each time the state changes.
+	// It must return at once and must not call back into App.
+	OnState func(NodeState)
 }
 
 // App owns the receiving process. Its exported methods are called from the
@@ -42,9 +55,13 @@ type App struct {
 	run   *runningNode
 	state NodeState
 
-	// peers is written by node events, which must never wait on mu: Stop holds
-	// mu while it waits for the node, and the node waits for its events.
-	peers atomic.Int64
+	// The fields below are read without mu: Stop holds mu while it waits for
+	// the node, and the node's callers must not wait for that.
+	cur     atomic.Pointer[node.Node] // the running node, nil when none
+	saveDir atomic.Pointer[string]    // the save folder of the latest start
+	// direct writes the history when no node runs; nil without a config
+	// folder.
+	direct *history.Store
 }
 
 // runningNode is one started node.
@@ -58,7 +75,11 @@ func NewApp(cfg appConfig) *App {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(io.Discard, "", 0)
 	}
-	return &App{cfg: cfg}
+	a := &App{cfg: cfg}
+	if cfg.ConfigDir != "" {
+		a.direct = history.Open(filepath.Join(cfg.ConfigDir, historyFileName))
+	}
+	return a
 }
 
 // settingsPath is where the settings live, or "" without a config folder.
@@ -118,10 +139,44 @@ func (a *App) State() NodeState {
 	return a.state
 }
 
-// PeerCount is the number of known peers. It is a placeholder until the
-// frontend gets the whole list.
-func (a *App) PeerCount() int {
-	return int(a.peers.Load())
+// SaveDir is the save folder the receiver was last started with, or "" if it
+// has not been started with one.
+func (a *App) SaveDir() string {
+	if p := a.saveDir.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
+
+// NodeID is the running node's device ID, or "" when no node runs or the node
+// has none.
+func (a *App) NodeID() string {
+	if n := a.cur.Load(); n != nil {
+		return n.ID()
+	}
+	return ""
+}
+
+// Record stores a sent entry in the history. The running node records it and
+// reports it as an event, and viaNode is true. Without a node the entry is
+// written directly and nothing is reported, so the caller must show it. The
+// entry's V and Time are set either way.
+func (a *App) Record(e history.Entry) (viaNode bool, err error) {
+	if n := a.cur.Load(); n != nil {
+		return true, n.Record(e)
+	}
+	if a.direct == nil {
+		return false, errors.New("no history: the config folder is unavailable")
+	}
+	return false, a.direct.Append(e)
+}
+
+// setStateLocked changes the state and reports it. The caller holds mu.
+func (a *App) setStateLocked(st NodeState) {
+	a.state = st
+	if a.cfg.OnState != nil {
+		a.cfg.OnState(st)
+	}
 }
 
 func (a *App) startLocked() {
@@ -129,11 +184,11 @@ func (a *App) startLocked() {
 		return
 	}
 	s := a.loadSettings()
+	a.saveDir.Store(&s.SaveDir)
 	if s.SaveDir == "" {
-		a.state = NodeState{Error: "cannot determine the save folder"}
+		a.setStateLocked(NodeState{Error: "cannot determine the save folder"})
 		return
 	}
-	a.peers.Store(0)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	n, err := node.Start(ctx, node.Config{
@@ -143,17 +198,18 @@ func (a *App) startLocked() {
 		MaxSize:   maxFileSize,
 		Name:      s.Name,
 		Logger:    a.cfg.Logger,
-		OnEvent:   a.onEvent,
+		OnEvent:   a.cfg.OnEvent,
 	})
 	if err != nil {
 		cancel()
 		a.cfg.Logger.Printf("cannot start the receiver: %v", err)
-		a.state = NodeState{Error: err.Error()}
+		a.setStateLocked(NodeState{Error: err.Error()})
 		return
 	}
 	r := &runningNode{cancel: cancel, stopped: make(chan struct{})}
 	a.run = r
-	a.state = NodeState{Running: true}
+	a.cur.Store(n)
+	a.setStateLocked(NodeState{Running: true})
 
 	go func() {
 		err := n.Wait()
@@ -167,13 +223,13 @@ func (a *App) startLocked() {
 		// The node ended by itself, for example its HTTP server failed.
 		cancel()
 		a.run = nil
-		a.peers.Store(0)
+		a.cur.Store(nil)
 		msg := "the receiver stopped"
 		if err != nil {
 			msg = err.Error()
 		}
 		a.cfg.Logger.Printf("receiver ended: %s", msg)
-		a.state = NodeState{Error: msg}
+		a.setStateLocked(NodeState{Error: msg})
 	}()
 }
 
@@ -182,20 +238,13 @@ func (a *App) stopLocked() {
 	if r == nil {
 		return
 	}
+	// Hide the node first so that a Record that starts now writes directly
+	// instead of reporting an event the stopping node would drop.
+	a.cur.Store(nil)
 	r.cancel()
 	<-r.stopped
 	a.run = nil
-	a.peers.Store(0)
-	a.state = NodeState{}
-}
-
-// onEvent runs on the node's goroutines, under its locks: it must return at
-// once and must not take a.mu. Later tasks replace it with real event
-// handling.
-func (a *App) onEvent(e node.Event) {
-	if e.Entry == nil {
-		a.peers.Store(int64(len(e.Peers)))
-	}
+	a.setStateLocked(NodeState{})
 }
 
 // openLog opens the GUI's log file in the config folder, appending to it with

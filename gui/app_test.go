@@ -129,7 +129,7 @@ func TestAppConcurrentCalls(t *testing.T) {
 					a.Restart()
 				default:
 					a.State()
-					a.PeerCount()
+					a.SaveDir()
 				}
 			}
 		}(i)
