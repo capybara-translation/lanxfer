@@ -293,9 +293,11 @@ func (s *Store) SetPeers(peers []presence.Peer) {
 		}
 	}
 
-	// Apply source by source in key order so the result does not depend on
-	// map iteration order. Each batch is in one chat's arrival order, which
-	// is what mergeByTime needs.
+	// Apply in two phases. First every source shrinks to what it keeps, so
+	// a chat that is both a source and a target cannot be overwritten by its
+	// own snapshot later. Then the batches are merged, in source key order so
+	// the result does not depend on map iteration order. Each batch is in one
+	// chat's arrival order, which is what mergeByTime needs.
 	sort.Slice(sources, func(i, j int) bool { return sources[i].key < sources[j].key })
 	for _, src := range sources {
 		if len(src.kept) == 0 {
@@ -304,16 +306,20 @@ func (s *Store) SetPeers(peers []presence.Peer) {
 			if s.open == src.key {
 				s.open = src.lastTo
 			}
-		} else {
-			src.chat.items = src.kept
-			src.chat.unread = 0
-			for _, it := range src.kept {
-				if it.unread {
-					src.chat.unread++
-				}
+			continue
+		}
+		src.chat.items = src.kept
+		src.chat.unread = 0
+		for _, it := range src.kept {
+			if it.unread {
+				src.chat.unread++
 			}
 		}
+	}
+	for _, src := range sources {
 		for _, b := range src.batches {
+			// A target that was emptied above is a real chat again.
+			delete(s.alias, b.to)
 			c := s.chatFor(b.to)
 			c.items = mergeByTime(c.items, b.items)
 			for _, it := range b.items {
@@ -326,6 +332,7 @@ func (s *Store) SetPeers(peers []presence.Peer) {
 			}
 		}
 	}
+	s.open = s.resolve(s.open)
 }
 
 // mergeByTime merges two lists, each in its own arrival order, by time. On a
@@ -451,11 +458,9 @@ func (s *Store) summarize(k Key, c *chat) Summary {
 		if ip := p.Addr.Addr(); ip.IsValid() {
 			sum.Addr = ip.Unmap().String()
 		}
-		return sum
-	}
-	// No peer: take the newest name and address the entries carry.
-	var name, addr string
-	if c != nil {
+	} else if c != nil {
+		// No peer: take the newest name and address the entries carry.
+		var name, addr string
 		for i := len(c.items) - 1; i >= 0 && (name == "" || addr == ""); i-- {
 			e := &c.items[i].e
 			if name == "" {
@@ -465,9 +470,8 @@ func (s *Store) summarize(k Key, c *chat) Summary {
 				addr = e.PeerAddr
 			}
 		}
+		sum.Name, sum.Addr = name, normAddr(addr)
 	}
-	sum.Name = name
-	sum.Addr = normAddr(addr)
 	if strings.HasPrefix(string(k), addrPrefix) {
 		sum.Addr = strings.TrimPrefix(string(k), addrPrefix)
 	}

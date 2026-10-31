@@ -538,3 +538,65 @@ func TestSetPeersWithoutMovesDoesNotCopyEntries(t *testing.T) {
 		t.Errorf("SetPeers allocated %.0f times for 2000 unmoved entries", allocs)
 	}
 }
+
+func texts(t *testing.T, s *Store, k Key) string {
+	t.Helper()
+	m, _ := s.Messages(k, 0, 200)
+	var got []string
+	for _, e := range m {
+		got = append(got, e.Text)
+	}
+	return strings.Join(got, ",")
+}
+
+func TestRegroupWithOverlappingSourcesLosesNothing(t *testing.T) {
+	// name:alice moves into name:bob, which is itself a source: B1 leaves it
+	// for id:CCCC while B2 stays.
+	for n := 0; n < 20; n++ {
+		s := New()
+		s.Add(text(history.In, "", "alice", "10.0.0.2", "A1", at(4)))
+		s.Add(text(history.In, "", "bob", "10.0.0.9", "B1", at(2)))
+		s.Add(text(history.In, "", "bob", "10.0.0.3", "B2", at(3)))
+		s.SetPeers([]presence.Peer{
+			peer("", "bob", "10.0.0.2", true, at(5)),
+			peer("CCCC", "carol", "10.0.0.9", true, at(5)),
+		})
+		if got := texts(t, s, "id:CCCC"); got != "B1" {
+			t.Fatalf("id:CCCC = %q", got)
+		}
+		if got := texts(t, s, "name:bob"); got != "B2,A1" {
+			t.Fatalf("name:bob = %q, want B2,A1", got)
+		}
+		if s.chats["name:alice"] != nil {
+			t.Fatal("name:alice still exists")
+		}
+		if got := texts(t, s, "name:alice"); got != "B2,A1" {
+			t.Fatalf("old key name:alice resolves to %q", got)
+		}
+		if u := summaryOf(t, s, "name:bob").Unread; u != 2 {
+			t.Fatalf("name:bob unread = %d", u)
+		}
+		total := 0
+		for _, sum := range s.Summaries() {
+			m, _ := s.Messages(sum.Key, 0, 200)
+			total += len(m)
+		}
+		if total != 3 {
+			t.Fatalf("%d entries survived, want 3", total)
+		}
+	}
+}
+
+func TestPeerWithEmptyNameUsesFallback(t *testing.T) {
+	s := New()
+	s.SetPeers([]presence.Peer{peer("0123456789ABCDEF", "", "10.0.0.2", true, at(0))})
+	if n := summaryOf(t, s, "id:0123456789ABCDEF").Name; n != "10.0.0.2" {
+		t.Errorf("name = %q, want the address", n)
+	}
+	p := peer("FEDCBA9876543210", "", "10.0.0.3", true, at(0))
+	p.Addr = netip.AddrPort{}
+	s.SetPeers([]presence.Peer{p})
+	if n := summaryOf(t, s, "id:FEDCBA9876543210").Name; n != "FEDCBA98" {
+		t.Errorf("name = %q, want the ID prefix", n)
+	}
+}
