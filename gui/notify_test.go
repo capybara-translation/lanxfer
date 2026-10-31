@@ -139,19 +139,33 @@ func TestFocusTracker(t *testing.T) {
 	}
 }
 
-func TestSystemText(t *testing.T) {
+func TestSystemBody(t *testing.T) {
 	in := `<a href="http://x">&click</a>`
-	if got, want := systemText("linux", in), `&lt;a href="http://x"&gt;&amp;click&lt;/a&gt;`; got != want {
+	if got, want := systemBody("linux", in), `&lt;a href="http://x"&gt;&amp;click&lt;/a&gt;`; got != want {
 		t.Errorf("linux = %q, want %q", got, want)
 	}
 	for _, goos := range []string{"windows", "darwin"} {
-		if got := systemText(goos, in); got != in {
+		if got := systemBody(goos, in); got != in {
 			t.Errorf("%s changed the text: %q", goos, got)
 		}
 	}
-	// Already-escaped text is escaped again, not left as markup.
-	if got := systemText("linux", "&lt;"); got != "&amp;lt;" {
+	// The title is not passed through this function: "A&B" must reach the
+	// summary as it is. Already-escaped body text is escaped again.
+	if got := systemBody("linux", "&lt;"); got != "&amp;lt;" {
 		t.Errorf("linux double escape = %q", got)
+	}
+}
+
+func TestSystemNotificationTextEscapesOnlyTheBody(t *testing.T) {
+	title, body := systemNotificationText("linux", "A&B <x>", "A&B <x>")
+	if title != "A&B <x>" {
+		t.Errorf("title = %q, want it unchanged", title)
+	}
+	if body != "A&amp;B &lt;x&gt;" {
+		t.Errorf("body = %q", body)
+	}
+	if title, body := systemNotificationText("windows", "A&B", "A&B"); title != "A&B" || body != "A&B" {
+		t.Errorf("windows = %q, %q", title, body)
 	}
 }
 

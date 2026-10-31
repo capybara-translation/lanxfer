@@ -4,6 +4,7 @@ package main
 
 import (
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,7 +34,7 @@ const (
 )
 
 // platformServices returns the services this OS adds. macOS adds none.
-func platformServices() []application.Service { return nil }
+func platformServices(*log.Logger) ([]application.Service, *serviceGate) { return nil, nil }
 
 // wailsToastWindow is the notification window on top of a Wails window.
 type wailsToastWindow struct {
@@ -92,8 +93,9 @@ func (w *wailsToastWindow) dismiss() {
 
 // newPlatformNotifier creates the notification window, hidden, and returns the
 // notifier that drives it. openChat is called when the toast is clicked. The
-// returned function stops the toast's timer; call it on quit.
-func newPlatformNotifier(app *application.App, logger *log.Logger, openChat func(chat.Key)) (notifier, func()) {
+// returned function removes the click monitor and stops the toast's timer; call
+// it on quit.
+func newPlatformNotifier(app *application.App, logger *log.Logger, _ *serviceGate, openChat func(chat.Key)) (notifier, func()) {
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:          toastWindowName,
 		Title:         "lanxfer notification",
@@ -139,8 +141,13 @@ func newPlatformNotifier(app *application.App, logger *log.Logger, openChat func
 			}
 		}
 	})
+	var monitor sync.Once
 	app.Event.On(eventToastReady, func(e *application.CustomEvent) {
 		if e.Sender == toastWindowName {
+			// The native window exists by now, because the page is running in
+			// it. A click is also caught natively, because the page may not
+			// get the first click of a window that is not active.
+			monitor.Do(func() { installToastClickMonitor(win.NativeWindow(), ts.clicked) })
 			ts.pageReady()
 		}
 	})
@@ -149,5 +156,8 @@ func newPlatformNotifier(app *application.App, logger *log.Logger, openChat func
 			ts.clicked()
 		}
 	})
-	return ts, ts.Close
+	return ts, func() {
+		removeToastClickMonitor()
+		ts.Close()
+	}
 }

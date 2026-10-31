@@ -63,6 +63,10 @@ func main() {
 		Emitter:   wailsEmitter{app: func() *application.App { return app }},
 	})
 
+	// The OS's own services (notifications on Windows and Linux), and the gate
+	// that tells the notifier whether they started.
+	osServices, serviceGate := platformServices(logger)
+
 	var win *application.WebviewWindow
 	// focus says whether the main window is in front; it decides if an arrival
 	// is announced. The window starts shown. Everything that hides or shows it
@@ -82,9 +86,9 @@ func main() {
 		// The page shows text from other machines, so it must not be able to
 		// start or stop the receiver: only Service is bound, and its exported
 		// methods are safe to call with anything. On Windows and Linux the
-		// system notifications service is bound as well; it is Wails' own and
-		// cannot be hidden from the page.
-		Services: append([]application.Service{application.NewService(svc)}, platformServices()...),
+		// notifications service is added too, wrapped so that it exposes no
+		// methods to the page and its failure does not stop the app.
+		Services: append([]application.Service{application.NewService(svc)}, osServices...),
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
@@ -136,7 +140,7 @@ func main() {
 
 	// A click on a notification opens that chat in the main window.
 	var n notifier
-	n, closeNotify = newPlatformNotifier(app, logger, func(key chat.Key) {
+	n, closeNotify = newPlatformNotifier(app, logger, serviceGate, func(key chat.Key) {
 		showMain()
 		app.Event.Emit(eventOpenChat, string(key))
 	})

@@ -93,11 +93,18 @@ func notificationTitle(name string) string {
 	return "Unknown"
 }
 
-// systemText prepares title or body text for the system's notifications. On
-// Linux the text is interpreted as markup by some notification daemons, so a
-// peer could show a link: &, < and > are escaped there. Other systems show the
-// text as it is.
-func systemText(goos, s string) string {
+// systemNotificationText returns the title and body to hand to the system's
+// notifications. Only the body is escaped; see systemBody.
+func systemNotificationText(goos, title, body string) (string, string) {
+	return title, systemBody(goos, body)
+}
+
+// systemBody prepares notification body text for the system's notifications.
+// On Linux the body is interpreted as markup by some notification daemons, so
+// a peer could show a link: &, < and > are escaped there. The title is not
+// touched: the freedesktop specification makes the summary plain text, so
+// escaping it would show "&amp;". Other systems show the text as it is.
+func systemBody(goos, s string) string {
 	if goos != "linux" {
 		return s
 	}

@@ -20,9 +20,18 @@ import (
 const notifyQueueSize = 32
 
 // platformServices returns the services this OS adds: the notifications
-// service. Wails starts and stops it with the app.
-func platformServices() []application.Service {
-	return []application.Service{application.NewService(notifications.New())}
+// service, wrapped so that a failure to start it only costs the notifications.
+// Wails starts and stops it with the app. The gate tells the notifier whether
+// it started.
+func platformServices(logger *log.Logger) ([]application.Service, *serviceGate) {
+	inner := notifications.New()
+	gate := newServiceGate()
+	return []application.Service{application.NewService(&optionalService{
+		name:  inner.ServiceName(),
+		inner: inner,
+		gate:  gate,
+		logf:  logger.Printf,
+	})}, gate
 }
 
 type systemNote struct {
@@ -34,6 +43,7 @@ type systemNote struct {
 // goes through the OS and may wait.
 type systemNotifier struct {
 	svc    *notifications.NotificationService
+	gate   *serviceGate
 	log    *log.Logger
 	queue  chan systemNote
 	done   chan struct{}
@@ -44,10 +54,11 @@ type systemNotifier struct {
 // newPlatformNotifier returns the notifier for the system's notifications.
 // openChat is called when the user clicks a notification. The returned
 // function stops the sending goroutine.
-func newPlatformNotifier(_ *application.App, logger *log.Logger, openChat func(chat.Key)) (notifier, func()) {
+func newPlatformNotifier(_ *application.App, logger *log.Logger, gate *serviceGate, openChat func(chat.Key)) (notifier, func()) {
 	svc := notifications.New()
 	n := &systemNotifier{
 		svc:   svc,
+		gate:  gate,
 		log:   logger,
 		queue: make(chan systemNote, notifyQueueSize),
 		done:  make(chan struct{}),
@@ -85,6 +96,13 @@ func (n *systemNotifier) Show(title, body string, key chat.Key) {
 }
 
 func (n *systemNotifier) run() {
+	// Notifications wait for the service to start. If it failed, the reason
+	// is already logged and the notes are dropped below.
+	select {
+	case <-n.gate.Ready():
+	case <-n.done:
+		return
+	}
 	// On Windows this is a stub that says yes; it is asked so that a refusal on
 	// any system shows up in the log.
 	if ok, err := n.svc.CheckNotificationAuthorization(); err != nil {
@@ -97,11 +115,15 @@ func (n *systemNotifier) run() {
 		case <-n.done:
 			return
 		case note := <-n.queue:
+			if !n.gate.OK() {
+				continue
+			}
 			n.nextID++
+			title, body := systemNotificationText(runtime.GOOS, note.title, note.body)
 			err := n.svc.SendNotification(notifications.NotificationOptions{
 				ID:    "lanxfer-" + strconv.FormatUint(n.nextID, 10),
-				Title: systemText(runtime.GOOS, note.title),
-				Body:  systemText(runtime.GOOS, note.body),
+				Title: title,
+				Body:  body,
 				// The key comes back in the response when the user clicks.
 				Data: map[string]interface{}{"key": string(note.key)},
 			})
